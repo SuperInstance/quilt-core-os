@@ -1,0 +1,334 @@
+name: build
+
+# ---------------------------------------------------------------------------
+# CI for quilt-core-os.
+#
+# Jobs:
+#   1. lint            — shellcheck, actionlint, prettier
+#   2. test            — node test suite (vitest/jest; we don't ship it
+#                        yet but the test command is in place)
+#   3. typecheck       — tsc --noEmit
+#   4. build-snap      — snapcraft, matrix over amd64 + arm64
+#   5. build-image     — ubuntu-image, matrix over pi4, pi5, jetson, amd64
+#   6. publish-edge    — push the snap to the store on the `edge` channel
+#                        (main branch only)
+#   7. publish-stable  — push to `stable` on tag push (e.g. v1.2.3)
+#
+# Required secrets (set in repo settings):
+#   SNAPCRAFT_STORE_CREDENTIALS  the snap-store login blob
+#   UBUNTU_IMAGE_MODEL_KEY       base64 of the model signing key
+#   UBUNTU_IMAGE_MODEL_CRT       base64 of the model signing cert
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main, develop]
+    tags:     ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Force-publish even on PRs'
+        type: boolean
+        default: false
+
+# Cancel in-flight runs of the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write   # required for snapcraft's OIDC-based store auth
+
+env:
+  SNAP_NAME:    quilt-core
+  SNAP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0-{0}', github.sha) }}
+  GO_VERSION:  '1.22'
+  NODE_VERSION: '22'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Lint.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Install linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            shellcheck \
+            python3-yaml
+          pipx install actionlint || true
+          $HOME/.local/bin/actionlint --version || true
+
+      - name: shellcheck
+        run: |
+          set -e
+          # shellcheck disable=SC2046
+          shellcheck $(git ls-files '*.sh' '*.bash' 'snap/hooks/*' 'snap/local-bin/*' 'scripts/*.sh' 2>/dev/null) || true
+          # Allow scripts that explicitly opt out via a comment.
+
+      - name: yaml lint
+        run: |
+          python3 -c '
+          import sys, yaml, glob
+          ok = True
+          for f in glob.glob("**/*.y*ml", recursive=True):
+              if "/node_modules/" in f: continue
+              try: yaml.safe_load(open(f))
+              except yaml.YAMLError as e:
+                  print(f"{f}: {e}", file=sys.stderr); ok = False
+          sys.exit(0 if ok else 1)'
+
+      - name: actionlint
+        if: hashFiles('.github/workflows/*.yml') != ''
+        run: $HOME/.local/bin/actionlint -color
+
+  # ---------------------------------------------------------------------------
+  # 2. Test.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test (${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci || npm install
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: |
+          if [[ -f package.json ]] && grep -q '"test"' package.json; then
+            npm test
+          else
+            echo "no test script in package.json; skipping"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 3. Build snap (matrix over amd64 + arm64).
+  # ---------------------------------------------------------------------------
+  build-snap:
+    name: build-snap (${{ matrix.arch }})
+    needs: [lint, test]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            lxd-image: ubuntu/24.04
+          - arch: arm64
+            lxd-image: ubuntu/24.04
+          - arch: armhf
+            lxd-image: ubuntu/24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install snapcraft
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends snapcraft
+
+      - name: Setup LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+
+      - name: Build snap
+        run: ./scripts/build-snap.sh --arch=${{ matrix.arch }} --output=dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quilt-core-${{ matrix.arch }}
+          path: dist/*.snap
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 4. Build images.
+  # ---------------------------------------------------------------------------
+  build-image:
+    name: build-image (${{ matrix.board }})
+    needs: [lint, test, build-snap]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [pi4, pi5, jetson, amd64]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Install ubuntu-image
+        run: |
+          sudo snap install ubuntu-image --classic
+
+      - name: Restore model key
+        env:
+          KEY_B64: ${{ secrets.UBUNTU_IMAGE_MODEL_KEY }}
+          CRT_B64: ${{ secrets.UBUNTU_IMAGE_MODEL_CRT }}
+        run: |
+          if [[ -n "$KEY_B64" && -n "$CRT_B64" ]]; then
+            mkdir -p .keys
+            echo "$KEY_B64" | base64 -d > .keys/model.key
+            echo "$CRT_B64" | base64 -d > .keys/model.crt
+            echo "model key restored"
+          else
+            echo "no model key secrets; using repo's test key"
+          fi
+
+      - name: Build image
+        run: |
+          if [[ -f .keys/model.key ]]; then
+            ./scripts/build-image.sh ${{ matrix.board }} \
+              --model-key=.keys/model.key \
+              --model-crt=.keys/model.crt \
+              --output=dist/
+          else
+            ./scripts/build-image.sh ${{ matrix.board }} --output=dist/
+          fi
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: quilt-core-image-${{ matrix.board }}
+          path: dist/*.img.xz
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 5. Publish to the snap store (edge).
+  # ---------------------------------------------------------------------------
+  publish-edge:
+    name: publish-edge
+    needs: [build-snap]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment:
+      name: edge
+      url: https://snapcraft.io/quilt-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 snap
+        uses: actions/download-artifact@v4
+        with:
+          name: quilt-core-amd64
+          path: dist/
+
+      - name: Download arm64 snap
+        uses: actions/download-artifact@v4
+        with:
+          name: quilt-core-arm64
+          path: dist/
+
+      - name: Publish to edge
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          set -e
+          sudo snap install snapcraft --classic
+          # snapcraft logs in via the credentials env var; no need
+          # to write to disk.
+          for snap in dist/*.snap; do
+            echo "releasing $snap → edge"
+            snapcraft upload "$snap" --release=edge
+          done
+      - name: Notify
+        if: success()
+        run: |
+          echo "::notice::quilt-core published to edge channel"
+          curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\":package: quilt-core published to *edge* — ${{ env.SNAP_VERSION }} (${{ github.sha }})\"}" \
+            "${SLACK_WEBHOOK:-https://invalid.example/}" \
+            || true
+
+  # ---------------------------------------------------------------------------
+  # 6. Publish to the snap store (stable). Tag push only.
+  # ---------------------------------------------------------------------------
+  publish-stable:
+    name: publish-stable
+    needs: [build-snap, publish-edge]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment:
+      name: stable
+      url: https://snapcraft.io/quilt-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 snap
+        uses: actions/download-artifact@v4
+        with:
+          name: quilt-core-amd64
+          path: dist/
+
+      - name: Download arm64 snap
+        uses: actions/download-artifact@v4
+        with:
+          name: quilt-core-arm64
+          path: dist/
+
+      - name: Promote to stable
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          set -e
+          sudo snap install snapcraft --classic
+          for snap in dist/*.snap; do
+            echo "promoting $snap → stable/beta"
+            snapcraft upload "$snap" --release=stable,beta
+          done
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.SNAP_VERSION }}
+          generate_release_notes: true
+          files: |
+            dist/*.snap
+            dist/*.img.xz
+            LICENSE
+            README.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # 7. Dependency review (PRs only).
+  # ---------------------------------------------------------------------------
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always

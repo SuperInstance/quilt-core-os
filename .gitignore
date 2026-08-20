@@ -1,0 +1,111 @@
+# ---------- editor + OS noise -----------------------------------------------
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+Icon
+ehthumbs.db
+Desktop.ini
+
+*.swp
+*.swo
+*.bak
+*.orig
+*.rej
+*.tmp
+*~
+.directory
+.fuse_hidden*
+
+# vim
+.vim/
+
+# vscode (per-workspace settings we want to track go in .vscode/, but
+# the user's running state is not).
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+.vscode/.cache
+
+# intellij / clion / goland
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ---------- node + TypeScript ----------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# dist/
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# coverage
+coverage/
+*.lcov
+.nyc_output
+
+# local env
+.env
+.env.local
+.env.*.local
+.envrc
+
+# ---------- snapcraft + ubuntu-image ----------------------------------------
+*.snap
+*.snap.keep
+*.assert
+overrides/
+
+# ---------- image outputs ---------------------------------------------------
+*.img
+*.img.xz
+*.img.bz2
+*.img.gz
+*.bmap
+
+# ---------- state / run / log (snap data) ----------------------------------
+/var/
+
+# ---------- key material (NEVER commit) ------------------------------------
+*.key
+*.crt
+*.pem
+.keys/
+.gpg/
+secrets/
+
+# ---------- CI caches -------------------------------------------------------
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+# ---------- python (used by the CI linter; not a runtime dep) --------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+pipx/
+.mypy_cache/
+.pytest_cache/
+
+# ---------- generated docs --------------------------------------------------
+docs/_build/
+docs/.doctrees/
+site/
+
+# ---------- misc -----------------------------------------------------------
+*.log
+*.pid
+*.sock
+.history

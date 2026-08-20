@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# snap/hooks/configure — config changed (`snap set quilt-core key=value`).
+#
+# snapd calls this hook whenever the user changes snap configuration
+# via `snap set quilt-core key=value`. We use it to:
+#   1. Validate the new config (reject obviously bad values early).
+#   2. Persist config to $SNAP_COMMON/state/config.json.
+#   3. Restart the daemon so the new config takes effect.
+#   4. (Re)open firewall ports if port-related settings changed.
+#
+# This hook is run as root.
+
+set -euo pipefail
+
+log() { printf '[quilt-core/configure] %s\n' "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
+
+: "${SNAP:=/snap/quilt-core/current}"
+: "${SNAP_DATA:=/var/snap/quilt-core/current}"
+: "${SNAP_COMMON:=/var/snap/quilt-core/common}"
+
+CONFIG_DIR="$SNAP_COMMON/state"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+TMP_CONFIG="$(mktemp -p "$CONFIG_DIR" config.json.XXXXXX)"
+trap 'rm -f "$TMP_CONFIG"' EXIT
+
+log "begin configure"
+
+# ---------------------------------------------------------------------------
+# 1. Read current snap config from `snap get`.
+#
+# snapd exposes config via /var/snap/<name>/common/config.json for
+# most snaps, but the authoritative source is `snapctl get -d`. We
+# use snapctl here.
+# ---------------------------------------------------------------------------
+if ! SNAP_CONFIG="$(snapctl get -d 2>/dev/null)"; then
+  log "snapctl get failed; assuming empty config"
+  SNAP_CONFIG='{}'
+fi
+
+log "current config: $SNAP_CONFIG"
+
+# Pretty-print for the persisted file.
+echo "$SNAP_CONFIG" | python3 -m json.tool > "$TMP_CONFIG" 2>/dev/null \
+  || echo "$SNAP_CONFIG" > "$TMP_CONFIG"
+
+# ---------------------------------------------------------------------------
+# 2. Validate. Each known key has a type and a small range check.
+# ---------------------------------------------------------------------------
+validate_port() {
+  local name="$1" value="$2"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+    die "config.$name must be a port 1-65535, got: $value"
+  fi
+}
+
+validate_enum() {
+  local name="$1" value="$2" allowed_csv="$3"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  IFS=',' read -ra allowed <<<"$allowed_csv"
+  for a in "${allowed[@]}"; do
+    if [[ "$a" == "$value" ]]; then
+      return 0
+    fi
+  done
+  die "config.$name must be one of: $allowed_csv (got: $value)"
+}
+
+CELL_PORT="$(snapctl get cell-port 2>/dev/null || true)"
+TELEMETRY_PORT="$(snapctl get telemetry-port 2>/dev/null || true)"
+OTA_CHANNEL="$(snapctl get ota-channel 2>/dev/null || true)"
+OTA_INTERVAL="$(snapctl get ota-interval 2>/dev/null || true)"
+LOG_LEVEL="$(snapctl get log-level 2>/dev/null || true)"
+FLEET_URL="$(snapctl get fleet-url 2>/dev/null || true)"
+
+validate_port cell-port       "$CELL_PORT"
+validate_port telemetry-port  "$TELEMETRY_PORT"
+validate_enum ota-channel     "$OTA_CHANNEL" "edge,beta,stable"
+validate_enum log-level       "$LOG_LEVEL"   "debug,info,warn,error"
+if [[ -n "$OTA_INTERVAL" ]] && ! [[ "$OTA_INTERVAL" =~ ^[0-9]+(m|h)$ ]]; then
+  die "config.ota-interval must be like 15m, 1h, 6h, 24h"
+fi
+if [[ -n "$FLEET_URL" ]] && ! [[ "$FLEET_URL" =~ ^https?:// ]]; then
+  die "config.fleet-url must be an http(s) URL"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Persist.
+# ---------------------------------------------------------------------------
+mv -f "$TMP_CONFIG" "$CONFIG_FILE"
+chmod 0640 "$CONFIG_FILE"
+chown root:_daemon "$CONFIG_FILE" 2>/dev/null || true
+trap - EXIT
+log "wrote $CONFIG_FILE"
+
+# ---------------------------------------------------------------------------
+# 4. (Re)open firewall ports if the cell port changed.
+# ---------------------------------------------------------------------------
+if [[ -n "$CELL_PORT" ]] && command -v nft >/dev/null 2>&1; then
+  if ! nft list chain inet filter input 2>/dev/null | grep -q "quilt-core-${CELL_PORT}"; then
+    nft add rule inet filter input tcp dport "$CELL_PORT" \
+      comment "quilt-core-${CELL_PORT}" accept 2>/dev/null \
+      || log "nft: could not add rule for $CELL_PORT (continuing)"
+    log "opened cell port $CELL_PORT"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Restart the daemon.
+#
+# We don't restart directly from this hook; instead, we touch a
+# "config-changed" sentinel file that the daemon watches. This
+# avoids racing with an in-flight request. The daemon restarts
+# itself cleanly within ~2 seconds.
+# ---------------------------------------------------------------------------
+SENTINEL="$SNAP_COMMON/run/config-changed"
+date -u +%s > "$SENTINEL" 2>/dev/null || echo "$(date +%s)" > "$SENTINEL"
+log "wrote config-changed sentinel at $SENTINEL"
+
+# Also poke the snapd service manager: a more aggressive path.
+# `snapctl restart` is a no-op in hooks; we use systemctl via
+# snapd's own service units.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl reload "snap.$SNAP_NAME.daemon.service" 2>/dev/null \
+    || systemctl restart "snap.$SNAP_NAME.daemon.service" 2>/dev/null \
+    || log "systemctl restart failed (daemon may not be running yet)"
+fi
+
+log "configure hook complete"
+exit 0

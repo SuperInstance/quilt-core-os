@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# snap/hooks/install — first-time install.
+#
+# Invoked by snapd when the snap is installed for the first time on
+# a given device. We use it to:
+#   1. Create the persistent state directories under $SNAP_COMMON.
+#   2. Generate a stable node identity (machine-id-like) if absent.
+#   3. Seed the SQLite state DB schema.
+#   4. Open the firewall ports Quilt needs.
+#   5. Print a friendly first-run banner to the journal.
+#
+# This hook is run as root (snapd runs hooks with full privileges).
+# Failures are surfaced to `snap install` output and to the journal.
+
+set -euo pipefail
+
+log() { printf '[quilt-core/install] %s\n' "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Resolve snap paths. snapd exports these to all hooks.
+# ---------------------------------------------------------------------------
+: "${SNAP:=/snap/quilt-core/current}"
+: "${SNAP_NAME:=quilt-core}"
+: "${SNAP_DATA:=/var/snap/quilt-core/current}"
+: "${SNAP_COMMON:=/var/snap/quilt-core/common}"
+
+log "begin install (snap revision: ${SNAP_REVISION:-unknown})"
+log "  SNAP_DATA   = $SNAP_DATA"
+log "  SNAP_COMMON = $SNAP_COMMON"
+
+# ---------------------------------------------------------------------------
+# 1. Persistent directories.
+#
+# Layout:
+#   /var/snap/quilt-core/common/state/    SQLite DB, durable across refreshes
+#   /var/snap/quilt-core/common/run/      unix sockets, pidfiles
+#   /var/snap/quilt-core/common/log/      logs
+#   /var/snap/quilt-core/common/cache/    downloaded bundles, model blobs
+#   /var/snap/quilt-core/current/devices/ bind-mounted serial devices
+# ---------------------------------------------------------------------------
+for dir in \
+  "$SNAP_COMMON/state" \
+  "$SNAP_COMMON/run" \
+  "$SNAP_COMMON/log" \
+  "$SNAP_COMMON/cache" \
+  "$SNAP_DATA/devices"
+do
+  if [[ ! -d "$dir" ]]; then
+    install -d -m 0750 -o root -g root "$dir"
+  fi
+done
+
+# Allow the daemon (which runs as _daemon:_daemon after the first start)
+# to write into state/run/log/cache.
+chown -R root:_daemon "$SNAP_COMMON" 2>/dev/null || true
+chmod 0750 "$SNAP_COMMON" "$SNAP_COMMON/state" "$SNAP_COMMON/run" "$SNAP_COMMON/log" "$SNAP_COMMON/cache"
+
+# ---------------------------------------------------------------------------
+# 2. Node identity.
+#
+# We generate a UUID v4 once and store it in $SNAP_COMMON. This is
+# how the device identifies itself to quilt-fleet. If the file is
+# already present (e.g. after a `snap revert`), keep it.
+# ---------------------------------------------------------------------------
+NODE_ID_FILE="$SNAP_COMMON/state/node-id"
+if [[ ! -s "$NODE_ID_FILE" ]]; then
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr 'A-Z' 'a-z' > "$NODE_ID_FILE"
+  else
+    # /proc/sys/kernel/random/uuid is always available on Linux.
+    cat /proc/sys/kernel/random/uuid > "$NODE_ID_FILE"
+  fi
+  chmod 0640 "$NODE_ID_FILE"
+  log "generated new node-id: $(cat "$NODE_ID_FILE")"
+else
+  log "preserving existing node-id: $(cat "$NODE_ID_FILE")"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Seed the state DB schema.
+#
+# We invoke the TypeScript daemon's "init" subcommand, which creates
+# the SQLite tables idempotently. The daemon binary is in
+# $SNAP/opt/quilt-core/dist/daemon.js.
+# ---------------------------------------------------------------------------
+DAEMON="$SNAP/opt/quilt-core/dist/daemon.js"
+if [[ -f "$DAEMON" ]]; then
+  log "seeding state DB schema via daemon init"
+  # Run as the daemon user, with a writable HOME (some node modules
+  # expect one for cache files).
+  if command -v setpriv >/dev/null 2>&1; then
+    setpriv --reuid=_daemon --regid=_daemon --clear-groups \
+      env HOME="$SNAP_COMMON" NODE_ENV=production \
+      node "$DAEMON" init --quiet || log "daemon init returned non-zero (continuing)"
+  else
+    # Fall back to running as root; daemon will still work.
+    env HOME="$SNAP_COMMON" NODE_ENV=production \
+      node "$DAEMON" init --quiet || log "daemon init returned non-zero (continuing)"
+  fi
+else
+  log "daemon bundle not found at $DAEMON (skipping DB seed)"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Open the firewall ports Quilt needs.
+#
+# We use the firewall-control plug; nftables is the default backend
+# on Ubuntu Core 24. If nft is not present (older Core), we fall back
+# to iptables. Either way, the rules are no-ops if the ruleset
+# already has them.
+# ---------------------------------------------------------------------------
+open_firewall() {
+  local port="$1" proto="${2:-tcp}"
+  if command -v nft >/dev/null 2>&1; then
+    nft list table inet filter >/dev/null 2>&1 || nft create table inet filter
+    if ! nft list chain inet filter input 2>/dev/null | grep -q "quilt-core-${port}"; then
+      nft add rule inet filter input tcp dport "$port" comment \"quilt-core-${port}\" accept 2>/dev/null \
+        || log "nft: could not add rule for port $port (continuing)"
+      log "opened nftables ${proto}/${port}"
+    fi
+  elif command -v iptables >/dev/null 2>&1; then
+    if ! iptables -C INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null; then
+      iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT \
+        || log "iptables: could not add rule for port $port (continuing)"
+      log "opened iptables ${proto}/${port}"
+    fi
+  else
+    log "no firewall tooling found; skipping port $port"
+  fi
+}
+
+# Default ports. These are configurable via `snap set quilt-core`.
+open_firewall 9090 tcp   # cell IPC
+open_firewall 9100 tcp   # telemetry
+open_firewall 9418 tcp   # git daemon (when a local cell uses one)
+
+# ---------------------------------------------------------------------------
+# 5. Friendly banner to the journal.
+# ---------------------------------------------------------------------------
+cat <<'BANNER' | systemd-cat -t quilt-core 2>/dev/null || cat <<'BANNER2' >&2
++----------------------------------------------------------+
+|  quilt-core  —  edge-AI runtime, installed              |
+|                                                          |
+|  next step:                                              |
+|      quilt-core init                                     |
+|  and then:                                               |
+|      quilt-core status                                   |
++----------------------------------------------------------+
+BANNER
+BANNER2
+
+log "install hook complete"
+exit 0

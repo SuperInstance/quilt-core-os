@@ -1,0 +1,51 @@
+# .editorconfig — consistent whitespace and charset across editors.
+# https://editorconfig.org
+
+root = true
+
+[*]
+charset                  = utf-8
+end_of_line              = lf
+indent_style             = space
+indent_size               = 2
+insert_final_newline     = true
+trim_trailing_whitespace = true
+
+# Makefiles need real tabs.
+[Makefile]
+indent_style = tab
+
+# Shell scripts: 2 spaces, 80 cols.
+[*.{sh,bash}]
+indent_size               = 2
+max_line_length           = 100
+shell_variant             = bash
+
+# Python: 4 spaces, 88 cols (black-compatible).
+[*.py]
+indent_size   = 4
+max_line_length = 88
+
+# Markdown: 2 spaces, but allow long lines (prose doesn't wrap nicely).
+[*.md]
+indent_size               = 2
+trim_trailing_whitespace = false
+max_line_length           = off
+
+# YAML: 2 spaces, no trailing whitespace.
+[*.{yaml,yml}]
+indent_size = 2
+max_line_length = 120
+
+# Go: tabs.
+[*.go]
+indent_style = tab
+indent_size  = tab
+
+# Rust: 4 spaces.
+[*.rs]
+indent_size = 4
+
+# JSON: 2 spaces.
+[*.json]
+indent_size = 2

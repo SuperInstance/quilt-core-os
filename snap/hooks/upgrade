@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# snap/hooks/upgrade — invoked on snap upgrades (refresh from rev N to rev N+1).
+#
+# On Ubuntu Core, the new revision is already staged in the alternate
+# A/B slot. This hook runs *before* the new revision becomes "current"
+# — i.e. we are still the *old* revision, in the *old* slot, with
+# access to the *old* daemon. We use this opportunity to:
+#
+#   1. Dump the current state DB to a versioned backup file. If the
+#      new revision's schema is incompatible, ops can roll back and
+#      restore from this dump.
+#   2. Run any pre-upgrade migrations. These are idempotent and
+#      gated by a marker in the DB.
+#   3. Stop the running daemon cleanly so its sockets/logs are
+#      closed (the new slot will start a fresh one).
+#   4. Print a banner to the journal so on-call sees the upgrade.
+#
+# After this hook returns, snapd swaps the slot and runs the new
+# revision's `post-refresh` hook.
+
+set -euo pipefail
+
+log() { printf '[quilt-core/upgrade] %s\n' "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
+
+: "${SNAP:=/snap/quilt-core/current}"
+: "${SNAP_NAME:=quilt-core}"
+: "${SNAP_DATA:=/var/snap/quilt-core/current}"
+: "${SNAP_COMMON:=/var/snap/quilt-core/common}"
+: "${SNAP_REVISION:=0}"
+: "${SNAP_VERSION:=0.0.0}"
+: "${SNAP_PREV_REVISION:=0}"
+
+BACKUP_DIR="$SNAP_COMMON/state/backups"
+STATE_DB="$SNAP_COMMON/state/state.db"
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+
+log "begin upgrade"
+log "  from revision : $SNAP_PREV_REVISION"
+log "  to   revision : $SNAP_REVISION"
+log "  to   version  : $SNAP_VERSION"
+
+# ---------------------------------------------------------------------------
+# 1. Pre-flight: refuse if the daemon is mid-flight.
+#
+# We check the "config-changed" sentinel we set in the configure
+# hook. If it is present and recent, the daemon is still draining;
+# wait up to 30s for it to settle.
+# ---------------------------------------------------------------------------
+SENTINEL="$SNAP_COMMON/run/config-changed"
+if [[ -f "$SENTINEL" ]]; then
+  log "config-changed sentinel present; waiting for daemon to settle"
+  for _ in $(seq 1 30); do
+    if [[ ! -f "$SENTINEL" ]] || [[ "$(cat "$SENTINEL" 2>/dev/null || echo 0)" -lt "$(($(date +%s) - 60))" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  rm -f "$SENTINEL"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Stop the daemon cleanly.
+#
+# snapd will stop it for us as part of the slot swap, but stopping
+# here means the new revision's `post-refresh` hook can rely on
+# fresh sockets. We send SIGTERM and wait up to 30s.
+# ---------------------------------------------------------------------------
+PIDFILE="$SNAP_COMMON/run/quilt-core.pid"
+if [[ -f "$PIDFILE" ]]; then
+  PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
+    log "stopping daemon (pid $PID)"
+    kill -TERM "$PID" 2>/dev/null || true
+    for _ in $(seq 1 30); do
+      if ! kill -0 "$PID" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$PID" 2>/dev/null; then
+      log "daemon did not stop in 30s, sending SIGKILL"
+      kill -KILL "$PID" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$PIDFILE"
+fi
+
+# Belt-and-braces: also stop the snapd service unit. This is a
+# no-op if it is already stopping.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop "snap.$SNAP_NAME.daemon.service" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Back up the state DB.
+#
+# We use sqlite3's `.backup` command, which is safe to run on a
+# live DB (it uses SQLite's online backup API). The result is a
+# pristine copy, not a corrupted half-written file.
+# ---------------------------------------------------------------------------
+install -d -m 0750 -o root -g root "$BACKUP_DIR"
+if [[ -f "$STATE_DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+  BACKUP_FILE="$BACKUP_DIR/state-${TS}-r${SNAP_PREV_REVISION}.db"
+  log "backing up state DB to $BACKUP_FILE"
+  if sqlite3 "$STATE_DB" ".timeout 5000" ".backup '$BACKUP_FILE'"; then
+    chmod 0640 "$BACKUP_FILE"
+    log "backup ok ($(stat -c%s "$BACKUP_FILE" 2>/dev/null || echo '?') bytes)"
+  else
+    log "WARN: sqlite backup failed; continuing anyway"
+  fi
+else
+  log "no state DB or sqlite3; skipping backup"
+fi
+
+# Prune old backups: keep the last 10.
+if [[ -d "$BACKUP_DIR" ]]; then
+  ls -1t "$BACKUP_DIR"/state-*.db 2>/dev/null | tail -n +11 | while read -r old; do
+    log "pruning old backup: $old"
+    rm -f "$old"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Run pre-upgrade migrations.
+#
+# Each migration is a small TS/JS script in $SNAP/migrations/ that
+# we invoke via node. They are *idempotent* — a marker row in the
+# `schema_migrations` table prevents double-execution. Migrations
+# that are not in the new revision's directory will simply be
+# skipped (the marker row will block re-execution if we ever see
+# them again).
+# ---------------------------------------------------------------------------
+MIGRATIONS_DIR="$SNAP/opt/quilt-core/migrations"
+if [[ -d "$MIGRATIONS_DIR" ]]; then
+  for m in "$MIGRATIONS_DIR"/*.js; do
+    [[ -e "$m" ]] || continue
+    log "running migration: $(basename "$m")"
+    env HOME="$SNAP_COMMON" NODE_ENV=production \
+      node "$m" --state-db "$STATE_DB" \
+      || log "WARN: migration $(basename "$m") failed (continuing)"
+  done
+else
+  log "no migrations dir at $MIGRATIONS_DIR; skipping"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Banner.
+# ---------------------------------------------------------------------------
+{
+  echo "+----------------------------------------------------------+"
+  echo "|  quilt-core  —  upgrading                                |"
+  echo "|    r${SNAP_PREV_REVISION} → r${SNAP_REVISION}  (${SNAP_VERSION})"
+  echo "+----------------------------------------------------------+"
+} | systemd-cat -t quilt-core 2>/dev/null || \
+  echo "+----------------------------------------------------------+" >&2
+
+log "upgrade hook complete; snapd will now swap the slot"
+exit 0

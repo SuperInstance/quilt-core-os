@@ -1,0 +1,42 @@
+# CODEOWNERS
+#
+# Default owners for every part of the repository. GitHub will auto-
+# request a review from these teams on every PR. The `@superinstance/quilt-core-os`
+# team is the only required approval; individual @mentions are
+# suggestions.
+#
+# Lines starting with `#` are comments. Each non-comment line is
+# `<pattern> <owner>`. The last match wins.
+
+# Default: entire repo.
+*                                          @superinstance/quilt-core-os
+
+# Snap definition and hooks (security-critical).
+/snap/                                     @superinstance/quilt-core-os @superinstance/snap-reviewers
+/snap/snapcraft.yaml                       @superinstance/snap-reviewers
+/snap/hooks/                               @superinstance/snap-reviewers
+/snap/local-bin/                           @superinstance/snap-reviewers
+
+# TypeScript daemon (the long-running service).
+/src/                                      @superinstance/quilt-core-os
+/src/daemon.ts                             @superinstance/quilt-core-os
+/src/state.ts                              @superinstance/quilt-core-os
+/src/ota-checker.ts                        @superinstance/quilt-core-os
+
+# Gadget definitions (per-board kernel+bootloader).
+/gadget/                                   @superinstance/gadget-reviewers
+/gadget/pi4.yaml                           @superinstance/gadget-reviewers
+/gadget/pi5.yaml                           @superinstance/gadget-reviewers
+/gadget/jetson.yaml                        @superinstance/gadget-reviewers
+
+# CI, security policy, and the build scripts.
+/.github/                                  @superinstance/devx
+/scripts/                                  @superinstance/devx
+/SECURITY.md                               @superinstance/security
+
+# Human docs.
+/docs/                                     @superinstance/docs
+
+# Top-level: README + LICENSE.
+/README.md                                 @superinstance/quilt-core-os
+/LICENSE                                   @superinstance/quilt-core-os

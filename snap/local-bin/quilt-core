@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# snap/local-bin/quilt-core — CLI entry point.
+#
+# This script is the `quilt-core` binary. The same script is
+# invoked by:
+#   - `quilt-core` (the CLI)            → user shells, fleet RPCs
+#   - `snap.$SNAP.daemon` (the daemon)  → snapd service unit
+#
+# Subcommand dispatch:
+#   quilt-core daemon                 → run the TS daemon (foreground)
+#   quilt-core init                   → first-time setup (DB seed, etc.)
+#   quilt-core status                 → print daemon health
+#   quilt-core cell list|start|stop   → cell management
+#   quilt-core fleet ping|register    → fleet control plane
+#   quilt-core ota check|refresh      → OTA control
+#   quilt-core configcheck            → config validation (one-shot)
+#   quilt-core --version              → version info
+#
+# All non-daemon subcommands connect to the daemon's unix socket
+# (QUILT_SOCK) and RPC. The CLI itself does not own a port.
+#
+# In strict confinement, $SNAP is read-only and we must use
+# $SNAP_DATA / $SNAP_COMMON for anything writable.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Environment.
+# ---------------------------------------------------------------------------
+: "${SNAP:=/snap/quilt-core/current}"
+: "${SNAP_NAME:=quilt-core}"
+: "${SNAP_DATA:=/var/snap/quilt-core/current}"
+: "${SNAP_COMMON:=/var/snap/quilt-core/common}"
+
+export QUILT_HOME="$SNAP_DATA"
+export QUILT_SOCK="${QUILT_SOCK:-$SNAP_COMMON/run/quilt-core.sock}"
+export QUILT_STATE="${QUILT_STATE:-$SNAP_COMMON/state/state.db}"
+export QUILT_LOG="${QUILT_LOG:-$SNAP_COMMON/log/quilt-core.log}"
+export QUILT_CACHE="${QUILT_CACHE:-$SNAP_COMMON/cache}"
+export NODE_PATH="${NODE_PATH:-$SNAP/opt/quilt-core/node_modules}"
+export NODE_ENV="${NODE_ENV:-production}"
+export PATH="$SNAP/bin:$SNAP/usr/bin:$SNAP/opt/quilt-core/node_modules/.bin:${PATH:-}"
+
+DAEMON_JS="$SNAP/opt/quilt-core/dist/daemon.js"
+CLI_JS="$SNAP/opt/quilt-core/dist/cli.js"
+
+# ---------------------------------------------------------------------------
+# Logging.
+# ---------------------------------------------------------------------------
+log_to_journal() {
+  local level="$1"; shift
+  if command -v systemd-cat >/dev/null 2>&1; then
+    printf -- '----- %s -----\n%s\n' "$(date -u +%FT%TZ)" "$*" \
+      | systemd-cat -t "quilt-core" -p "$level" 2>/dev/null || true
+  fi
+}
+
+die() {
+  local msg="$*"
+  echo "quilt-core: $msg" >&2
+  log_to_journal err "$msg"
+  exit 1
+}
+
+info() {
+  echo "quilt-core: $*" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+print_version() {
+  cat <<EOF
+quilt-core ${SNAP_VERSION:-dev} (snap revision ${SNAP_REVISION:-local})
+  base    : ${SNAP:-/snap/quilt-core/current}
+  data    : $SNAP_DATA
+  common  : $SNAP_COMMON
+  socket  : $QUILT_SOCK
+  state   : $QUILT_STATE
+  log     : $QUILT_LOG
+  node    : $(node --version 2>/dev/null || echo 'unknown')
+  confinement: strict
+EOF
+}
+
+# Wait for the unix socket to appear. Used by status / RPC commands
+# so they don't race the daemon at boot.
+wait_for_socket() {
+  local tries="${1:-30}"
+  for _ in $(seq 1 "$tries"); do
+    if [[ -S "$QUILT_SOCK" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Pre-flight: check that the snap layout exists and node is installed.
+# ---------------------------------------------------------------------------
+require_layout() {
+  for d in "$SNAP_COMMON/state" "$SNAP_COMMON/run" "$SNAP_COMMON/log"; do
+    [[ -d "$d" ]] || die "missing $d — run 'quilt-core init' first"
+  done
+  [[ -f "$QUILT_STATE" ]] || die "state DB not initialised — run 'quilt-core init'"
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing — keep it POSIX; no getopts loops with state.
+# ---------------------------------------------------------------------------
+if [[ $# -eq 0 ]]; then
+  exec node "$CLI_JS" --help
+fi
+
+# Special cases that don't need the daemon.
+case "$1" in
+  --version|-v|version)
+    print_version; exit 0 ;;
+  --help|-h|help)
+    exec node "$CLI_JS" --help ;;
+  init)
+    shift
+    log_to_journal info "init invoked (uid=$(id -u))"
+    exec node "$DAEMON_JS" init "$@"
+    ;;
+esac
+
+# All other subcommands require the daemon to be reachable.
+require_layout
+
+case "$1" in
+  daemon)
+    shift
+    # Foreground, no daemonization: snapd owns the lifecycle.
+    log_to_journal info "daemon starting (snap rev ${SNAP_REVISION:-local})"
+    exec node "$DAEMON_JS" daemon "$@"
+    ;;
+  configcheck)
+    # One-shot config validator (used by the oneshot timer service).
+    exec node "$DAEMON_JS" configcheck
+    ;;
+  status)
+    wait_for_socket 30 || die "daemon socket not present at $QUILT_SOCK"
+    exec node "$CLI_JS" status "$@"
+    ;;
+  cell|fleet|ota|config|logs|doctor)
+    wait_for_socket 30 || die "daemon socket not present at $QUILT_SOCK"
+    exec node "$CLI_JS" "$@"
+    ;;
+  *)
+    # Fall through: let the CLI handle the error and print usage.
+    wait_for_socket 5 || true
+    exec node "$CLI_JS" "$@"
+    ;;
+esac

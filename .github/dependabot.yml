@@ -1,0 +1,94 @@
+# .github/dependabot.yml
+#
+# Keep the snap, the TypeScript daemon, and the GitHub Actions
+# dependencies up to date. We pin weekly for runtime, monthly for
+# dev tools, and immediate for security updates.
+
+version: 2
+enable-beta-ecosystems: false
+
+updates:
+  # -------------------------------------------------------------------------
+  # npm — TypeScript daemon and its deps.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 8
+    labels: ["dependencies", "npm"]
+    commit-message:
+      prefix: "npm"
+      include: "scope"
+    groups:
+      runtime-deps:
+        dependency-type: "production"
+        patterns: ["*"]
+      dev-deps:
+        dependency-type: "development"
+        patterns: ["*"]
+    ignore:
+      # Major-version bumps of node are a deliberate decision; the
+      # daemon needs at least Node 22 for `node:sqlite`.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # -------------------------------------------------------------------------
+  # GitHub Actions — keep the workflow steps fresh.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 6
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # -------------------------------------------------------------------------
+  # Snap base — quarterly. Pin to a known-tested revision.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: "snap"
+    directory: "/snap"
+    schedule:
+      interval: "monthly"
+      day: "first monday"
+      time: "07:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 2
+    labels: ["dependencies", "snap"]
+    commit-message:
+      prefix: "snap"
+    ignore:
+      - dependency-name: "core24"
+        update-types: ["version-update:semver-major"]
+
+  # -------------------------------------------------------------------------
+  # Docker — none today, but enabled so we get alerts if a Dockerfile
+  # is added later.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels: ["dependencies", "docker"]
+    open-pull-requests-limit: 2
+
+  # -------------------------------------------------------------------------
+  # Cargo — none today; only for `quilt-elf` and friends.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels: ["dependencies", "rust"]
+    open-pull-requests-limit: 2

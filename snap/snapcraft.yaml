@@ -1,0 +1,239 @@
+name: quilt-core
+base: core24
+adopt-info: quilt-core
+summary: Quilt edge runtime — immutable, atomic, un-brickable.
+description: |
+  Quilt is an edge-AI runtime that turns a Raspberry Pi, Jetson, or
+  generic amd64 box into a self-healing Quilt cell. The OS layer
+  ships as a strict-confinement snap on Ubuntu Core so every
+  refresh is atomic and every bad boot reverts automatically.
+
+  This snap contains:
+    - The TypeScript `quilt-core` daemon (unix-socket service).
+    - The CLI shim used by users and `quilt-fleet`.
+    - The state store (SQLite) and OTA checker.
+
+  The kernel, bootloader, and base are provided by Ubuntu Core and
+  the gadget snap — see https://github.com/SuperInstance/quilt-core-os.
+
+license: Apache-2.0
+icon: src/assets/quilt-core.svg
+
+grade: stable
+confinement: strict
+
+compression: lzo
+
+# ---------------------------------------------------------------------------
+# Build-time metadata
+# ---------------------------------------------------------------------------
+parts:
+  quilt-core:
+    plugin: nil
+    source: .
+    build-packages:
+      - nodejs
+      - npm
+    override-build: |
+      set -e
+      # Install the TypeScript daemon + its dependencies.
+      npm ci --omit=dev
+      npm run compile
+      mkdir -p $CRAFT_PART_INSTALL/opt/quilt-core
+      cp -r dist/      $CRAFT_PART_INSTALL/opt/quilt-core/
+      cp -r node_modules $CRAFT_PART_INSTALL/opt/quilt-core/
+      cp package.json   $CRAFT_PART_INSTALL/opt/quilt-core/
+      cp -r src/assets  $CRAFT_PART_INSTALL/opt/quilt-core/assets
+    stage-packages:
+      - libsqlite3-0
+      - ca-certificates
+      - openssl
+
+  # Binaries shipped as part of the snap, not built from source.
+  local-bin:
+    plugin: dump
+    source: snap/local-bin
+    organize:
+      '*': bin/
+
+  # Snap hooks (bash).
+  hooks:
+    plugin: dump
+    source: snap/hooks
+    organize:
+      '*': snap/hooks/
+
+# ---------------------------------------------------------------------------
+# Layout: the daemon is the heart of the snap.
+# ---------------------------------------------------------------------------
+layout:
+  $SNAP_DATA/state:        { bind: $SNAP_COMMON/state }
+  $SNAP_DATA/run:          { bind: $SNAP_COMMON/run }
+  $SNAP_DATA/log:          { bind: $SNAP_COMMON/log }
+  $SNAP_DATA/cache:        { bind: $SNAP_COMMON/cache }
+  # Allow the daemon to talk to the ESP32 USB serial on a Pi.
+  /dev/ttyUSB0:            { bind: $SNAP_DATA/devices/ttyUSB0 }
+  /dev/ttyACM0:            { bind: $SNAP_DATA/devices/ttyACM0 }
+
+# ---------------------------------------------------------------------------
+# Apps: the CLI shim and the long-running daemon.
+# ---------------------------------------------------------------------------
+apps:
+  quilt-core:
+    command: bin/quilt-core
+    command-chain: [bin/hooks-pre]
+    daemon: simple
+    daemon-scope: system
+    restart-condition: on-failure
+    restart-delay: 5s
+    stop-timeout: 30s
+    install-mode: enable
+    refresh-mode: ignore-running
+    common-id: quilt-core
+    plugs:
+      - network
+      - network-bind
+      - firewall-control
+      - home
+      - system-observe
+      - opengl
+      - raw-usb
+      - serial-port
+      - bluez
+      - removable-media
+      - shutdown
+      - hardware-observe
+      - process-control
+      - log-observe
+      - mount-observe
+    environment:
+      NODE_ENV: production
+      NODE_PATH: $SNAP/opt/quilt-core/node_modules
+      QUILT_HOME: $SNAP_DATA
+      QUILT_SOCK: $SNAP_DATA/run/quilt-core.sock
+      QUILT_STATE: $SNAP_COMMON/state/state.db
+      QUILT_LOG: $SNAP_COMMON/log/quilt-core.log
+      QUILT_CACHE: $SNAP_COMMON/cache
+      QUILT_VERSION: $SNAP_VERSION
+      QUILT_REVISION: $SNAP_REVISION
+
+  quilt-core.cli:
+    command: bin/quilt-core
+    # The CLI is the same binary but invoked without `daemon` subcommand.
+    # Users run `quilt-core status`, `quilt-core init`, etc.
+    plugs:
+      - network
+      - network-bind
+      - home
+      - system-observe
+      - raw-usb
+      - serial-port
+      - removable-media
+      - log-observe
+
+  # One-shot helper invoked by the configure hook.
+  quilt-core.configcheck:
+    command: bin/quilt-core configcheck
+    daemon: oneshot
+    timer: 1d
+    plugs:
+      - network
+
+# ---------------------------------------------------------------------------
+# Plugs: requests; users (or a brand store) must connect them.
+# ---------------------------------------------------------------------------
+plugs:
+  firewall-control:
+    interface: firewall-control
+  raw-usb:
+    interface: raw-usb
+  serial-port:
+    interface: serial-port
+    # The two most common ESP32 dev boards.
+    usb-vendor-ids: [0x0403, 0x10c4, 0x1a86, 0x303a]
+  bluez:
+    interface: bluez
+  opengl:
+    interface: opengl
+
+# ---------------------------------------------------------------------------
+# Hooks
+# ---------------------------------------------------------------------------
+hooks:
+  install:
+    plugs:
+      - network
+      - system-observe
+  configure:
+    plugs:
+      - network
+      - system-observe
+  upgrade:
+    plugs:
+      - network
+      - system-observe
+  pre-refresh:
+    plugs:
+      - network
+  post-refresh:
+    plugs:
+      - network
+      - system-observe
+
+# ---------------------------------------------------------------------------
+# System users / groups
+# ---------------------------------------------------------------------------
+system-usernames:
+  snap_daemon:
+    scope: shared
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+environment:
+  LC_ALL: C.UTF-8
+  PATH: $PATH:$SNAP/bin:$SNAP/usr/bin
+
+# ---------------------------------------------------------------------------
+# Assumptions: the gadget snap must provide the kernel + bootloader.
+# These are documented in gadget/{pi4,pi5,jetson}.yaml in this repo.
+# ---------------------------------------------------------------------------
+assumptions:
+  command-chain: ['bin/hooks-pre']
+  system-backup: true
+
+# ---------------------------------------------------------------------------
+# Slots: expose the unix socket to other snaps (e.g. quilt-fleet
+# would consume the slot if installed side-by-side; today we
+# publish a simple DBus-style socket to the host only).
+# ---------------------------------------------------------------------------
+slots:
+  quilt-core-socket:
+    interface: content
+    content: quilt-core-socket
+    read:
+      - $SNAP_DATA/run
+
+# ---------------------------------------------------------------------------
+# Extra metadata that the snap store uses for ranking.
+# ---------------------------------------------------------------------------
+keywords:
+  - iot
+  - edge
+  - ai
+  - immutable
+  - ubuntu-core
+  - quilt
+  - snap
+  - rollback
+
+license-agreement: https://www.apache.org/licenses/LICENSE-2.0
+contact:
+  name: SuperInstance
+  email: ops@superinstance.io
+  url: https://superinstance.io
+website: https://github.com/SuperInstance/quilt-core-os
+source-code: https://github.com/SuperInstance/quilt-core-os
+issues: https://github.com/SuperInstance/quilt-core-os/issues
+donation:
+  - https://github.com/sponsors/SuperInstance
