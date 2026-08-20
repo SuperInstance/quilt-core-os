@@ -1,0 +1,135 @@
+# gadget/pi5.yaml — Ubuntu Core gadget for Raspberry Pi 5.
+#
+# Same as pi4.yaml but tuned for the Pi 5. The Pi 5 has:
+#   - BCM2712 SoC (Cortex-A76, 2.4 GHz quad-core)
+#   - RP1 southbridge (provides USB 3, Ethernet, PCIe Gen 2)
+#   - 4 / 8 GB LPDDR4X
+#   - 2x USB 3.0, 2x USB 2.0, 1x PCIe Gen 2 x1 (M.2 HAT)
+#   - Power button (the Pi 4 had none; this changes the
+#     `pre-shutdown` and `power-button` systemd unit behaviour)
+#
+# Differences from pi4:
+#   - GPU memory 256 MB → 128 MB (Pi 5 has more headroom and we
+#     don't use much GPU; saves RAM for cells).
+#   - The boot EEPROM is different; we ship the Pi 5 bootloader.
+#   - The PCIe Gen 2 link needs `pciexr_gen=2` for full speed.
+
+name: quilt-pi5
+version: 24-0.4
+summary: Quilt gadget for the Raspberry Pi 5.
+description: |
+  Boot, partition layout, and device-tree configuration for the
+  Raspberry Pi 5 (4 GB and 8 GB revisions B0). Used by
+  quilt-core's Ubuntu Core image.
+
+grade: stable
+type: base
+icon: pi5.png
+
+base: core24
+
+# Pi 5 is arm64. The Pi 5 does not have an armhf mode at all
+# (the BCM2712 only ships in 64-bit configurations).
+architectures:
+  - arm64
+
+volumes:
+  pi5:
+    schema: mbr
+    bootloader: u-boot
+    structure:
+      - name: system-boot
+        type: 0C
+        filesystem: vfat
+        filesystem-label: system-boot
+        size: 512M
+        content:
+          - source: bootfiles/
+            target: /
+        update:
+          preserve: true
+
+      - name: system-seed
+        role: system-seed
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: system-seed
+        size: 512M
+        update:
+          preserve: true
+
+      - name: system-data
+        role: system-data
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: writable
+        update:
+          preserve: true
+
+# Pi 5 boot config.
+#
+# Differences from pi 4:
+#   - `arm_64bit: 1` is the only mode (no 32-bit fallback).
+#   - `pciexr_gen=2` enables PCIe Gen 2 on the M.2 HAT.
+#   - `power_button_led` lights the LED when the device is on;
+#     useful for fleet ops.
+#   - `disable_poe_fan` lets the OS control the fan; the default
+#     of "always on" is too noisy in a fleet.
+defaults:
+  pi5:
+    target: /boot/firmware/config.txt
+    arm_64bit: 1
+    gpu_mem: 128
+    enable_uart: 1
+    disable_splash: 1
+    disable_overscan: 1
+    # PCIe Gen 2 for the M.2 HAT (NVMe).
+    pciexr_gen: 2
+    # OS-controlled fan.
+    disable_poe_fan: 1
+    # Power-button LED behaviour.
+    power_button_led: 1
+    # Kernel command line.
+    cmdline: "snap_core=core24 snap_kernel=pi5-kernel console=tty1 console=serial0,115200 quiet splash vt.global_cursor_default=0"
+
+kernel-cmdline: "console=tty1 console=serial0,115200 quiet splash vt.global_cursor_default=0"
+
+# Pi 5 device-tree. The Pi 5's DT is a single .dtb for all
+# revisions; we only need bcm2712-rpi-5-b.dtb.
+device-tree: pi5-device-trees/
+
+assumes:
+  - snapctl-after-boot
+  - common-data-dir
+  - core22-base
+
+hooks:
+  install:
+    plugs: []
+
+plugs:
+  system-backup:
+    interface: system-backup
+
+# ---------------------------------------------------------------------------
+# Pi 5-specific notes for ops:
+#
+#   1. The Pi 5's bootloader is in the SPI EEPROM, not on the SD
+#      card. A re-flash of the SD card does not change the
+#      bootloader. To update the bootloader, use `rpi-eeprom-update`
+#      from the writable partition:
+#         sudo rpi-eeprom-update -a
+#         sudo reboot
+#      Or use the recovery image from rpi.org if the EEPROM is
+#      corrupted.
+#
+#   2. The Pi 5 can boot from NVMe (M.2 HAT) directly. To enable:
+#      set `BOOT_ORDER=0xf416` in the EEPROM config. We default
+#      to SD-card boot; NVMe boot is opt-in for performance.
+#
+#   3. The Pi 5 has a power button. By default, a short press
+#      powers on, a long press (>= 4s) powers off. The Quilt
+#      `configure` hook does not override this; operators can
+#      install `systemd-logind` overrides if they want different
+#      behaviour.
+# ---------------------------------------------------------------------------

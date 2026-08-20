@@ -1,0 +1,174 @@
+# gadget/jetson.yaml — Ubuntu Core gadget for the NVIDIA Jetson
+# Orin Nano (and Orin NX module, in the same form factor).
+#
+# This gadget ships:
+#   - The Tegra bootloader (cboot + MB1 + MB2) for the Orin.
+#   - The OEM kernel + NVIDIA L4T userspace.
+#   - The CUDA userland (built into a separate runtime snap;
+#     see quilt-jetson).
+#   - The boot script (bootlin/board-init).
+#
+# The Jetson does not have a U-Boot in the canonical sense; it
+# uses NVIDIA's cboot, which loads the kernel from a special
+# partition. We model that as a vfat "boot" partition here.
+#
+# IMPORTANT: Unlike the Pi, the Jetson's boot ROM is on the
+# module itself. Re-flashing the SD card (or NVMe) does NOT
+# touch the boot ROM. The ROM is updated via `tegraflash` over
+# USB-C in recovery mode. We do not attempt that here; the
+# Jetson ships with a Quilt-compatible ROM from the factory.
+
+name: quilt-jetson
+version: 36-3.0
+summary: Quilt gadget for the NVIDIA Jetson Orin Nano / Orin NX.
+description: |
+  Boot, partition layout, and device-tree configuration for the
+  NVIDIA Jetson Orin Nano dev kit and Orin NX module. Used by
+  quilt-core's Ubuntu Core image for edge-GPU inference.
+
+grade: stable
+type: base
+icon: jetson.png
+
+base: core24
+
+# Jetson is arm64.
+architectures:
+  - arm64
+
+# ---------------------------------------------------------------------------
+# Layout.
+#
+# The Jetson's cboot requires:
+#   p1:  LNX (kernel + dtb)        vfat,   64 MB
+#   p2:  DTB (device tree blob)    vfat,    8 MB  (or merged into p1)
+#   p3:  EBT (cboot binary)        vfat,    8 MB
+#   p4:  system-seed               ext4,  512 MB
+#   p5:  system-data (writable)    ext4,    rest
+#
+# We collapse DTB and EBT into the LNX partition to simplify.
+# In a production image we separate them so the kernel can be
+# updated without touching cboot.
+# ---------------------------------------------------------------------------
+volumes:
+  jetson:
+    schema: gpt
+    bootloader: u-boot
+    structure:
+      - name: lnx
+        type: 0C
+        filesystem: vfat
+        filesystem-label: LNX
+        size: 64M
+        content:
+          - source: lnx/
+            target: /
+        update:
+          preserve: true
+
+      - name: ebt
+        type: 0C
+        filesystem: vfat
+        filesystem-label: EBT
+        size: 8M
+        content:
+          - source: ebt/
+            target: /
+        update:
+          preserve: true
+
+      - name: system-seed
+        role: system-seed
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: system-seed
+        size: 512M
+        update:
+          preserve: true
+
+      - name: system-data
+        role: system-data
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: writable
+        update:
+          preserve: true
+
+# ---------------------------------------------------------------------------
+# Bootloader.
+#
+# The Jetson's cboot is in p2 (EBT). It loads LNX from p1. The
+# kernel command line is in extlinux.conf inside p1.
+# ---------------------------------------------------------------------------
+defaults:
+  jetson:
+    target: /boot/extlinux/extlinux.conf
+    # Default kernel command line. Note the `nv-auto-config`
+    # and `tegra_fbmem` parameters; these are required for the
+    # L4T userspace.
+    kernel_cmdline: "root=/dev/mmcblk0p5 rw rootwait console=ttyS0,115200 console=ttyTCU0,115200 tegra_fbmem=0x800000@0x96000000 nv-auto-config"
+
+# extlinux.conf path (where cboot looks for the kernel + cmdline).
+kernel-cmdline: "root=/dev/mmcblk0p5 rw rootwait console=ttyS0,115200 console=ttyTCU0,115200 tegra_fbmem=0x800000@0x96000000 nv-auto-config"
+
+# ---------------------------------------------------------------------------
+# Device-tree. We ship one DTB per Jetson SKU:
+#   - tegra234-p3701-0000-p3737-0000.dtb  (Orin Nano dev kit, 4GB)
+#   - tegra234-p3701-0004-p3737-0000.dtb  (Orin Nano dev kit, 8GB)
+#   - tegra234-p3767-0000-p3768-0000-a0.dtb (Orin NX 8GB)
+#   - tegra234-p3767-0001-p3768-0000-a0.dtb (Orin NX 16GB)
+#   - tegra234-p3767-0003-p3768-0000-a0.dtb (Orin NX 8GB v2)
+#   - tegra234-p3767-0004-p3768-0000-a0.dtb (Orin NX 16GB v2)
+# ---------------------------------------------------------------------------
+device-tree: jetson-device-trees/
+
+# ---------------------------------------------------------------------------
+# Snap metadata.
+# ---------------------------------------------------------------------------
+assumes:
+  - snapctl-after-boot
+  - common-data-dir
+  - core22-base
+  - nvidia-cuda          # declared by the runtime snap
+
+hooks:
+  install:
+    plugs: []
+
+plugs:
+  system-backup:
+    interface: system-backup
+  nvidia-driver:
+    interface: nvidia-driver
+    # Tegra kernel modules. The L4T userland matches.
+    nvidia-driver-branch: "535"
+  nvidia-cuda:
+    interface: nvidia-cuda
+    cuda-version: "12.4"
+
+# ---------------------------------------------------------------------------
+# Jetson-specific notes for ops:
+#
+#   1. Power modes. `nvpmodel -m <id>` selects a power profile:
+#        0: 15W (default; 4x CPU @ 1.5 GHz, GPU @ 625 MHz)
+#        1: 25W (4x CPU @ 2.0 GHz, GPU @ 625 MHz, requires 25W PSU)
+#        2: 40W (Orin NX only; 8x CPU @ 2.0 GHz, GPU @ 1.1 GHz)
+#      Quilt defaults to mode 0 for thermal headroom in enclosures.
+#      Operators can pin a mode in the configure hook.
+#
+#   2. Fan control. The Jetson has a PWM fan. `nvfancontrol` is
+#      provided by quilt-jetson-runtime. Default is "auto"; the
+#      daemon reads `nvpmodel` and sets the fan profile.
+#
+#   3. The Orin NX module boots from NVMe by default; the Orin
+#      Nano dev kit boots from microSD. We support both.
+#
+#   4. GPU partitioning. `tegrastats` shows the live GPU
+#      utilisation per engine. We surface this in `quilt-core
+#      status --gpu`.
+#
+#   5. Recovery. If cboot is corrupted (rare; only happens with
+#      bad EEPROM updates), the Jetson is in a "recovery" state
+#      where it enumerates over USB-C. Use `tegradevflash` to
+#      re-flash. See NVIDIA's L4T documentation.
+# ---------------------------------------------------------------------------

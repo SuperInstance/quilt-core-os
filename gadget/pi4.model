@@ -1,0 +1,40 @@
+type: model
+authority-id: superinstance
+series: 16
+brand-id: superinstance
+model: quilt-pi4
+architecture: arm64
+base: core24
+grade: stable
+snaps:
+  -
+    name: pi4-kernel
+    id: jeIuPz1P5OZw9P4Doy1gGE7QRuC4wEr2
+    type: kernel
+    default-channel: 24/stable
+  -
+    name: core24
+    id: dwEUgnsB1a2Wp9LAn8S5P4e1S5k3RfOL
+    type: base
+    default-channel: latest/stable
+  -
+    name: quilt-pi4
+    id: mVZtVkIu8FmVl4LdJ7zJy5AhIa9bQ0Rd
+    type: gadget
+    default-channel: latest/stable
+  -
+    name: quilt-core
+    id: a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6
+    type: app
+    default-channel: latest/stable
+    presence: required
+  -
+    name: snapd
+    id: PMrrV4ml8uWuEUDBT8dSGnDUY1bCsh3D
+    type: snapd
+    default-channel: latest/stable
+    presence: required
+timestamp: 2024-09-01T00:00:00.000Z
+sign-key-sha3-384: aRSA-test-key-not-real-do-not-use-in-production
+AcLBzgQAAQoABgUCXxx0XAAKCRDnzxj6P4n3AP9qAQCWsp4lOAhR7r5rqiXb8Z5
+3b5UEFghLmqQ7oShQfd1+VKzQHkD/3+sEXAMPLEFINGERPRINTHERE0123456789AB==

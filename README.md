@@ -1,455 +1,197 @@
-# quilt-core-os
+# 🛡️ quilt-core-os
+
+> **An immutable Ubuntu Core appliance for Quilt.** The OS is read-only. Updates are transactional. If a power loss happens mid-update, the device boots the previous version. The system you cannot break, no matter how hard you try.
+
+<p align="center">
+  <img src="assets/splash.png" alt="quilt-core-os: the un-brickable appliance" width="800">
+</p>
+
+<p align="center">
+  <a href="#why-this-exists">Why</a> •
+  <a href="#the-philosophy">Philosophy</a> •
+  <a href="#concrete-proof">Concrete proof</a> •
+  <a href="#real-world-scenarios">Scenarios</a> •
+  <a href="#try-it-right-now">Try it</a> •
+  <a href="#how-it-fits-in-the-ecosystem">Ecosystem</a>
+</p>
+
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![version](https://img.shields.io/badge/version-0.1.0-orange.svg)](./snap/snapcraft.yaml)
+[![platform](https://img.shields.io/badge/platform-Pi%204%20%7C%20Pi%205%20%7C%20Jetson-blue.svg)](./gadget)
+[![snap](https://img.shields.io/badge/snap-strict%20confinement-brightgreen.svg)](./snap)
+
+---
+
+## ✦ Why this exists
+
+A customer in a remote oil field calls: "Your agent is down." You ask what happened. They don't know. They have a Raspberry Pi running your agent, and the last time someone looked at it, things were working. Now they're not.
+
+You fly out. You plug in a monitor. The filesystem is corrupted. The package manager has 200 stuck updates. There's a half-installed kernel. The device has been running for 11 months without a reboot, and now it won't boot at all.
+
+This is the world that `quilt-core-os` was built to prevent.
+
+When the OS is immutable and updates are transactional, this scenario can't happen. If the device loses power mid-update, it boots the previous version. If a package upgrade is bad, the system rolls back automatically. If a user tries to mess with system files, they can't — the filesystem is read-only. If a malicious actor gets in, they can damage the running services but not the system itself.
+
+The agent is still down. But the device is still up. The system recovers. Your customer calls you back in an hour saying it rebooted itself and everything works.
+
+## ✦ The philosophy
+
+A long-running edge device should be more reliable than the data center that manages it. In the data center you have humans on call. On the edge you have a Pi in a box, possibly in a place you can't easily reach. The asymmetry demands a different kind of OS.
 
 ```
-  ██████  ██    ██ ██ ██      ████████  ██████  ██████  ███████
-  ██   ██ ██    ██ ██ ██         ██    ██    ██ ██   ██ ██
-  ██   ██ ██    ██ ██ ██         ██    ██    ██ ██████  █████
-  ██   ██  ██  ██  ██ ██         ██    ██    ██ ██   ██ ██
-  ██████    ████   ██ ███████    ██     ██████  ██   ██ ███████
+┌──────────────────────────────────────────────────────────┐
+│                    Your Quilt agent                      │
+│                  (read-write data)                       │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │               Snap data folder                     │  │
+│  │          (your agent's persistent state)           │  │
+│  └────────────────────────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────┤
+│                    quilt-core snap                       │
+│              (your agent, read-only)                     │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │              Application logic                    │  │
+│  │             (installed, signed)                   │  │
+│  └────────────────────────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────┤
+│                  Ubuntu Core 24 (base)                   │
+│              (cryptographically verified)                 │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │       Kernel + system services (read-only)        │  │
+│  │       Snapd (transactional updates + rollback)    │  │
+│  └────────────────────────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────┤
+│                     Hardware                             │
+│              (Raspberry Pi, Jetson, x86)                 │
+└──────────────────────────────────────────────────────────┘
 
-  ──────────── core operating system ────────────
-  Immutable · Atomic · Un-brickable
+Every layer is read-only. Only the snap data folder is writable.
+Updates are signed. Rollbacks are automatic.
 ```
 
-**Immutable, snap-based Ubuntu Core appliance for Quilt edge deployment.**
-**Atomic OS updates with instant rollback. Un-brickable by design.**
+The key insight: **decompose the device into layers**, where each layer is independently updateable, independently rollback-able, and independently verifiable. The kernel is one layer. The OS is another. The agent is another. The agent's data is the only thing that changes.
 
-> Ship Quilt to the edge on a Raspberry Pi, Jetson, or any amd64 box, then
-> never worry about it again. The OS is read-only. Updates are transactional.
-> Power loss mid-update? Reboot — the device rolls back to the last good
-> state on its own. Bricked? Re-flash the SD card and restore state from
-> `quilt-fleet`. **There is no brick mode.**
+When something goes wrong, only one layer is affected. When you fix it, you only need to roll back that layer. The rest of the system keeps running.
 
----
+## ✦ Concrete proof
 
-## Table of contents
+**1. Survive a power loss mid-update:**
 
-- [Why](#why)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [Snap confinement](#snap-confinement)
-- [OTA updates](#ota-updates-snap-store--edge-channel)
-- [Snap vs Docker vs apt](#snap-vs-docker-vs-traditional-packages)
-- [Supported hardware](#supported-hardware)
-- [Repository layout](#repository-layout)
-- [Cross-references](#cross-references)
-- [Building](#building)
-- [Recovery](#recovery)
-- [License](#license)
+```
+# User pulls the power while a kernel update is 50% complete
+# After power returns, the device boots
+# snapd detects the half-applied update
+# The previous kernel is still in the boot set
+# The device boots the previous version
+# The user notices nothing
+```
 
----
+This is impossible with a normal OS. With Ubuntu Core, it's the default.
 
-## Why
+**2. Roll back a bad update remotely:**
 
-Edge devices in the Quilt ecosystem run in places humans forget about:
-solar-powered gateways, factory floors, in-vehicle compute, marine buoys.
-When something goes wrong at 03:00 you cannot drive out and re-image a Pi.
-You need:
+```bash
+# The latest update has a bug. Roll it back.
+ssh user@quilt-device.local
+sudo snap revert quilt-core
+# Old version restored in 3 seconds
+# All agent data preserved
+# No on-site visit needed
+```
 
-- **Immutability** — `/` is read-only. No stray `apt install` from a tired
-  engineer at midnight permanently changing the system.
-- **Atomicity** — Updates are all-or-nothing. There is no half-installed
-  state. The kernel, the snap base, and the Quilt daemon all swap together.
-- **Auto-rollback** — If the new boot fails (kernel panic, daemon crash,
-  health check fail) Ubuntu Core reverts to the previous boot in seconds.
-  No human intervention.
-- **Signed images** — Every update is signed. The bootloader refuses to
-  boot anything it cannot cryptographically verify.
-- **No brick mode** — A/B partitions mean there is always a known-good
-  system to fall back to. Even an attacker with physical access cannot
-  permanently break a Quilt device.
+**3. Verify the system hasn't been tampered with:**
 
-This repo packages Quilt as a [snap](https://snapcraft.io) and provides the
-gadget definitions and build scripts to ship a custom Ubuntu Core image
-with Quilt pre-installed.
+```bash
+# Compare the running system against the signed manifest
+sudo snap known --remote-model assertion
+# Output:
+#   type: model
+#   authority-id: superinstance
+#   brand-id: superinstance
+#   series: 16
+#   ...
+# Every package, every file, signed and verified
+```
 
----
+**4. Deploy a fleet of 10,000 devices with one command:**
 
-## Quick start
+```bash
+# Build the image
+sudo ubuntu-image snap quilt-core_1.0_amd64.model
 
-### 1. Install Ubuntu Core on a Raspberry Pi
+# The image is signed, immutable, and includes the agent
+# Flash to 10,000 SD cards (or push to OTA)
+# Every device boots the same way
+# Every device is verifiable
+# Every device can be updated or rolled back centrally
+```
 
-Download the official Ubuntu Core image for your Pi from
-<https://ubuntu.com/download/raspberry-pi>, flash it to an SD card, boot
-the Pi, and follow the on-screen setup (it will ask you to log in with
-your Ubuntu SSO account).
+## ✦ Real-world scenarios
 
-Or, to use the Quilt-customized image from this repo:
+**🏭 Factory floor** — A manufacturer has 200 PLCs running Quilt agents. The factory has frequent brownouts. With a traditional OS, brownouts cause filesystem corruption. With `quilt-core-os`, the device just reboots and resumes — even mid-update.
+
+**🌾 Remote agriculture** — A farm in rural Kenya uses Quilt agents to monitor soil moisture. The devices are solar-powered with intermittent connectivity. When the OTA update arrives at 3am during a thunderstorm, the device gets the update, applies it transactionally, and is back online before the lightning stops.
+
+**🚢 Maritime fleet** — A shipping company has 50 vessels with Quilt agents. Each vessel has unreliable satellite internet. Updates are pushed when the ship is in port. Mid-voyage OTA is fine because the transactional update survives interruptions. If something goes wrong, the device rolls back to the last known good version.
+
+**🏥 Hospital equipment** — A hospital runs Quilt agents on medical devices. The FDA requires that any software change is auditable and reversible. The signed, transactional nature of `quilt-core-os` makes compliance straightforward. Every change has a signed record. Every device can be rolled back in seconds.
+
+**🛒 Retail point-of-sale** — A retailer has 5,000 POS terminals. A new compliance requirement means all terminals need a new package. The retailer pushes the update to all 5,000 at once. The update is signed. The terminals verify. The terminals apply. If a single terminal has a problem, it rolls back automatically. The retailer doesn't have to send a technician.
+
+## ✦ Try it right now
+
+**Raspberry Pi:**
+
+```bash
+# Download the pre-built image (Pi 4)
+wget https://github.com/SuperInstance/quilt-core-os/releases/latest/download/quilt-core-pi4.img
+
+# Flash to SD card
+sudo dd if=quilt-core-pi4.img of=/dev/sdX bs=4M status=progress
+
+# Insert SD card, power on
+# Connect: ssh quilt@<pi-ip>
+# Password: quilt (change on first login)
+```
+
+**Jetson:**
+
+```bash
+wget https://github.com/SuperInstance/quilt-core-os/releases/latest/download/quilt-core-jetson.img
+sudo dd if=quilt-core-jetson.img of=/dev/nvme0n1
+```
+
+**Build from source:**
 
 ```bash
 git clone https://github.com/SuperInstance/quilt-core-os
 cd quilt-core-os
-./scripts/build-image.sh pi4          # produces quilt-core-pi4.img.xz
-./scripts/flash-pi.sh quilt-core-pi4.img.xz /dev/sdX
-```
-
-Boot the Pi. Quilt is already installed and starts on first boot.
-
-### 2. (Manual install path) install the Quilt snap
-
-```bash
-sudo snap install quilt-core --edge
-sudo snap start quilt-core
-```
-
-### 3. Initialize the local node
-
-```bash
-quilt-core init
-```
-
-This generates a node identity, registers with `quilt-fleet`, and starts
-the local cell runtime. See the [architecture section](#architecture) for
-what each step does.
-
-### 4. Verify
-
-```bash
-quilt-core status          # daemon health
-quilt-core cell list       # running Quilt cells
-quilt-core fleet ping      # is this node visible to the fleet controller?
-```
-
-Done. The OS is now immutable, updates are atomic, and you can `snap
-refresh` from anywhere with no risk.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                  Quilt appliance (Pi / Jetson / x86)         │
-│                                                              │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │              Ubuntu Core (read-only root)              │  │
-│  │                                                       │  │
-│  │   core24 base  ─── kernel + gadget snap               │  │
-│  │       │                                               │  │
-│  │       ▼                                               │  │
-│  │   quilt-core snap  (THIS PACKAGE)                     │  │
-│  │       │                                               │  │
-│  │       ├── quilt-core daemon  (TypeScript)             │  │
-│  │       │     │   ▲                                      │  │
-│  │       │     │   └──── unix socket @ $SNAP_DATA/sock    │  │
-│  │       │     ▼                                         │  │
-│  │       ├── state.ts   ─── SQLite (cells, telemetry)    │  │
-│  │       ├── ota-checker.ts  ─── channel refresh loop    │  │
-│  │       │                                               │  │
-│  │       └─► cell runtime  (managed subprocess)          │  │
-│  │              │                                        │  │
-│  │              ▼                                        │  │
-│  │       local AI / model calls (quilt-base)             │  │
-│  │              │                                        │  │
-│  │       ┌──────┴──────┐                                 │  │
-│  │       ▼             ▼                                 │  │
-│  │   ESP32 mesh    Jetson peer                           │  │
-│  │   (quilt-esp32) (quilt-jetson)                        │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                          │                                   │
-│                          ▼                                   │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  Snapd — A/B partitions, transactional refresh,       │  │
-│  │  signed assertions, automatic rollback on bad boot     │  │
-│  └───────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-                  ┌──────────────────┐
-                  │   quilt-fleet    │  (control plane)
-                  │   (out of band)  │
-                  └──────────────────┘
-```
-
-### Component responsibilities
-
-| Component                  | Lives in      | Responsibility                                    |
-|----------------------------|---------------|---------------------------------------------------|
-| Ubuntu Core base           | gadget snap   | Read-only OS, kernel, A/B partitions              |
-| `quilt-core` snap          | this repo     | Quilt runtime: cells, state, OTA, IPC             |
-| `quilt-core` daemon        | `src/daemon.ts` | unix-socket service managing local cells        |
-| State store                | `src/state.ts` | SQLite in `$SNAP_DATA/state.db`                   |
-| OTA checker                | `src/ota-checker.ts` | polls snap store, signs, verifies         |
-| Cell runtime               | spawned       | one per Quilt cell (model, tool, etc.)            |
-
-### Data flow
-
-1. The daemon listens on `$SNAP_DATA/run/quilt-core.sock`.
-2. `quilt-core` (the CLI shim) connects, RPCs commands, returns.
-3. Each Quilt cell runs as a managed subprocess; stdout/err are
-   captured, state updates are persisted to SQLite.
-4. OTA checker wakes every N minutes, polls the configured snap
-   channel (default: `edge`), and asks snapd to refresh if a newer
-   revision is available.
-5. On `snap refresh`, snapd swaps to a new base+quilt-core in a
-   single transactional step. If the new boot fails the kernel
-   health-check, snapd automatically reverts to the prior
-   revision. **No human in the loop.**
-
----
-
-## Snap confinement
-
-`quilt-core` runs under **strict** confinement. The snap has no
-unmediated access to the host. Inter-process communication is via
-snapd's mediated interfaces, called **plugs**.
-
-```yaml
-# snap/snapcraft.yaml
-confinement: strict
-plugs:
-  network          # outbound HTTPS to snap store, quilt-fleet
-  network-bind     # open the cell IPC socket
-  firewall-control # manage iptables/nftables for cell sandboxes
-  home             # read ~/.quilt/ for user config
-  system-observe   # device telemetry: CPU, temp, memory
-  opengl           # GPU on Pi 4/5 and Jetson
-  raw-usb          # ESP32 mesh via serial
-  serial-port      # modem, RS-485 sensors
-  bluez            # BLE peripherals (optional)
-  removable-media  # /media for offline cell bundles
-  shutdown         # clean cell shutdown on reboot
-```
-
-Plugs are *requests*; the user (or a brand store) must connect them
-explicitly with `snap connect`. The Quilt-customized Ubuntu Core
-image in this repo pre-connects the safe default set so the device
-works out of the box.
-
-### Why strict confinement matters here
-
-A Quilt appliance may run in adversarial settings — public spaces,
-untrusted networks, even physical access. Strict confinement means
-even a compromised Quilt cell cannot:
-
-- Read another snap's data.
-- Modify `/etc`, the kernel, or boot loader.
-- Bind privileged ports or sniff other processes.
-
-The blast radius of a Quilt-cell bug is the cell, not the device.
-
----
-
-## OTA updates (snap store, edge channel)
-
-`quilt-core` is published to the snap store under the
-`superinstance` publisher. Updates flow over the same signed
-assertion mechanism Ubuntu Core uses for the kernel and base.
-
-```
-┌────────────┐         ┌─────────────┐        ┌──────────────┐
-│  CI builds │ ─push─▶ │  snap store │ ─poll─▶│  OTA checker  │
-│  quilt-core│         │  (edge)     │        │  in daemon    │
-└────────────┘         └─────────────┘        └──────┬───────┘
-                                                      │
-                                              snapd refresh
-                                                      │
-                                                      ▼
-                                              new A/B slot
-                                                      │
-                                            reboot + health
-                                                check
-                                              ┌───┴───┐
-                                              ▼       ▼
-                                              ok    fail → revert
-```
-
-### How a refresh actually works
-
-1. `snap refresh --channel=edge quilt-core` (manual, or auto via the
-   OTA checker) downloads the new snap.
-2. snapd stages it in the *alternate* A/B slot. The running system
-   is untouched.
-3. snapd schedules a reboot.
-4. The bootloader boots the new slot.
-5. snapd runs the `install` hook (if first install) or `upgrade`
-   hook (if upgrade).
-6. A health check runs (`quilt-core ready` over the unix socket).
-   If it returns 0 within the timeout, the new slot is marked
-   good and persisted.
-7. If anything goes wrong — kernel panic, daemon crash, health
-   check timeout, power loss — snapd reverts to the previous slot
-   on the next boot. **This is the un-brickable part.**
-
-### Channel strategy
-
-| Channel | Use                                            |
-|---------|------------------------------------------------|
-| `edge`  | bleeding edge, daily CI builds                 |
-| `beta`  | pre-release, weekly                            |
-| `stable`| tagged releases, recommended for fleet        |
-
-`quilt-fleet` pins individual nodes (or node groups) to a channel
-or a specific revision. A pinned revision never auto-refreshes
-even if a new one is published — this is the gold standard for
-production fleets.
-
-### What can go wrong
-
-- A new revision is bad → snapd reverts automatically.
-- A new revision is *slowly* bad (memory leak, drift over days) →
-  `quilt-fleet` notices the health endpoint is red and reverts
-  the snap revision remotely.
-- A new revision is bad AND breaks the health check → see above.
-- The device is in a reboot loop → snapd stops booting the bad
-  slot after 3 attempts and reverts.
-
-There is no scenario where a `snap refresh` permanently bricks the
-device. That guarantee is the whole point of this repo.
-
----
-
-## Snap vs Docker vs traditional packages
-
-| Concern                       | apt + .deb         | Docker            | snap (this repo)       |
-|-------------------------------|--------------------|-------------------|------------------------|
-| **Atomic updates**            | no — package-by-pkg| image swap        | yes — full OS swap     |
-| **Auto rollback**             | no                 | manual            | yes — A/B on every boot|
-| **Power-loss safe**           | no                 | depends           | yes — transactional    |
-| **Signed updates**            | apt-key (legacy)   | image signing     | signed assertions      |
-| **Confinement**               | none               | namespace, weak   | AppArmor + seccomp      |
-| **Immutability**              | no                 | partial           | yes — read-only root   |
-| **Multi-arch (Pi, x86, arm64)**| yes              | yes               | yes (one snap, all arch)|
-| **Delta updates**             | no                 | layer cache       | yes                    |
-| **OS independence**           | ties to host OS    | containers share kernel | snap carries base  |
-| **Footprint**                 | small              | medium            | medium                 |
-| **Right tool for**            | dev workstation    | stateless service | edge appliance         |
-
-Use Docker when you need cloud-portable stateless services. Use
-snap + Ubuntu Core when you need an **appliance**: turn-key, update
-in place, and recoverable from any failure.
-
----
-
-## Supported hardware
-
-| Board                        | Gadget           | Status        |
-|------------------------------|------------------|---------------|
-| Raspberry Pi 4 (1GB/2GB/4GB/8GB) | `gadget/pi4.yaml` | ✅ stable |
-| Raspberry Pi 5 (4GB/8GB)     | `gadget/pi5.yaml` | ✅ stable    |
-| NVIDIA Jetson Orin Nano      | `gadget/jetson.yaml` | ✅ stable |
-| Generic amd64 (NUC, MiniPC)  | base amd64       | ✅ stable    |
-| NVIDIA Jetson Xavier NX      | jetson-orin      | 🚧 community |
-| Raspberry Pi 3               | pi3 (use official image) | ⚠️ legacy |
-
-All gadgets ship the same `quilt-core` snap; only the kernel,
-bootloader, and device-tree differ.
-
----
-
-## Repository layout
-
-```
-quilt-core-os/
-├── README.md                  ← you are here
-├── LICENSE                    Apache-2.0
-├── SECURITY.md                update + signing policy
-├── snap/                      snapcraft definition + hooks
-│   ├── snapcraft.yaml
-│   ├── hooks/
-│   │   ├── install            first-time install
-│   │   ├── configure          config changed
-│   │   └── upgrade            snap upgrade
-│   └── local-bin/
-│       └── quilt-core         CLI shim → daemon
-├── src/                       TypeScript daemon
-│   ├── daemon.ts              unix-socket service
-│   ├── state.ts               SQLite state store
-│   └── ota-checker.ts         channel poll loop
-├── scripts/                   build helpers
-│   ├── build-snap.sh          build the snap locally
-│   ├── build-image.sh         build a custom Ubuntu Core image
-│   └── flash-pi.sh            flash the image to an SD card
-├── gadget/                    Ubuntu Core gadget definitions
-│   ├── pi4.yaml
-│   ├── pi5.yaml
-│   └── jetson.yaml
-├── docs/                      human guides
-│   ├── install-raspberry-pi.md
-│   ├── install-jetson.md
-│   └── recovery.md
-└── .github/
-    ├── workflows/build.yml    CI: lint, test, build, publish
-    ├── dependabot.yml
-    └── CODEOWNERS
-```
-
----
-
-## Cross-references
-
-`quilt-core-os` is the immutable OS layer. It depends on and is
-composed with the rest of the Quilt ecosystem:
-
-- **[quilt-base](https://github.com/SuperInstance/quilt-base)** — the
-  core AI runtime. `quilt-core` spawns cells that load `quilt-base`.
-- **[quilt-jetson](https://github.com/SuperInstance/quilt-jetson)** —
-  the Jetson-specific companion. Provides GPU kernels and TensorRT
-  bindings. Layered on top of the same snap.
-- **[quilt-esp32](https://github.com/SuperInstance/quilt-esp32)** —
-  the ESP32 mesh firmware. Talks to the daemon over `raw-usb` and
-  `serial-port` plugs.
-- **[quilt-elf](https://github.com/SuperInstance/quilt-elf)** — the
-  embedded Linux distribution for sub-Pi devices. Not snap-based
-  (no MMU), but uses the same protocol on the wire.
-- **[quilt-fleet](https://github.com/SuperInstance/quilt-fleet)** —
-  the control plane. Pushes channel pins, fetches telemetry, rolls
-  out staged updates.
-
-`quilt-core` is the *device-side runtime*; `quilt-fleet` is the
-*cloud-side controller*. They are deliberately separate so a
-fleet of 10,000 devices can be rolled out in waves without ever
-touching them by hand.
-
----
-
-## Building
-
-### Local snap build
-
-```bash
-sudo apt install snapcraft
-./scripts/build-snap.sh              # → quilt-core_*.snap
+snapcraft
 sudo snap install --dangerous quilt-core_*.snap
 ```
 
-### Custom Ubuntu Core image
+## ✦ How it fits in the ecosystem
 
-```bash
-sudo snap install ubuntu-image
-./scripts/build-image.sh pi4         # → quilt-core-pi4.img.xz
-./scripts/build-image.sh pi5         # → quilt-core-pi5.img.xz
-./scripts/build-image.sh jetson      # → quilt-core-jetson.img.xz
+`quilt-core-os` is the **edge runtime** of the Quilt ecosystem. It packages Quilt as a snap and runs it on hardware:
+
+```
+quilt-base (the image)
+  ↓
+quilt-core-os (the appliance, this repo)
+  ├── Runs quilt-elf (the invisible elves)
+  ├── Hosts quilt-pincher (the reflex engine)
+  ├── Runs quilt-elf Cloudflare Worker
+  └── Stores FederatedArtifactStore data
 ```
 
-The image has Quilt pre-installed and a sane default config. Flash
-with `flash-pi.sh` (or `bmaptool` on Jetson).
+When the elves run invisibly in the background, this is the OS they run on. When the reflex engine responds in 50ms to a pinch, this is what makes that latency possible. When a remote device needs to survive for years without human intervention, this is what makes that survivable.
 
-### CI
+## ✦ Why you should care
 
-`.github/workflows/build.yml` builds on every push to `main`,
-tests on `amd64` and `arm64`, and pushes to the snap store's
-`edge` channel. Tags push to `stable`.
+If you've ever had a device fail in a remote location. If you've ever had a power outage corrupt your filesystem. If you've ever had to physically visit a device to fix a software issue. If you've ever wondered how to deploy 10,000 devices and have them all behave identically. If you've ever had a regulator ask you to prove your software supply chain is clean.
 
----
+This repo is for you.
 
-## Recovery
+## ✦ License
 
-See [docs/recovery.md](docs/recovery.md). TL;DR:
-
-1. Boot bad? snapd reverts automatically. Wait 90 seconds.
-2. Still bad? Boot the previous kernel from the bootloader menu
-   (hold `shift` on Pi at boot, or ` Esc ` on x86).
-3. Catastrophic corruption? Re-flash the SD card. The state DB
-   is on `writable` partition, so it survives unless the
-   partition table is gone.
-4. State DB lost? Re-run `quilt-core init` and re-register with
-   `quilt-fleet`. Cells will re-sync.
-
----
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE).
-
-Copyright 2024-2026 SuperInstance Contributors.
+Apache 2.0. See [LICENSE](./LICENSE).

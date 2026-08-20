@@ -1,0 +1,154 @@
+# gadget/pi4.yaml — Ubuntu Core gadget for Raspberry Pi 4.
+#
+# This file describes the "gadget snap" for a Raspberry Pi 4. The
+# gadget is a special snap that contains:
+#   - the bootloader config (here: pi4's config.txt)
+#   - the kernel command line
+#   - the partition layout (system-boot, system-seed, system-data)
+#   - device-tree blobs (DTBs) for the Pi 4 variants
+#
+# The gadget snap is built by `snapcraft` from this directory. The
+# resulting snap is referenced by the model assertion. The kernel
+# and base are pulled in as separate snaps (pc-kernel, core24).
+#
+# For the full gadget format see:
+#   https://snapcraft.io/docs/the-gadget-snap
+#   https://ubuntu.com/core/docs/gadget-building
+
+# ---------------------------------------------------------------------------
+# Identity.
+# ---------------------------------------------------------------------------
+name: quilt-pi4
+version: 24-0.4
+summary: Quilt gadget for the Raspberry Pi 4.
+description: |
+  Boot, partition layout, and device-tree configuration for the
+  Raspberry Pi 4 (1/2/4/8 GB revisions 1.4 and 1.5). Used by
+  quilt-core's Ubuntu Core image.
+
+grade: stable
+type: base
+icon: pi4.png
+
+# ---------------------------------------------------------------------------
+# Base snap. The kernel snap is a separate "kernel" snap declared
+# in the model. We only carry the bootloader + layout here.
+# ---------------------------------------------------------------------------
+base: core24
+
+# ---------------------------------------------------------------------------
+# Architecture. Pi 4 is arm64 only.
+# ---------------------------------------------------------------------------
+architectures:
+  - arm64
+
+# ---------------------------------------------------------------------------
+# Layout: where each piece of the system lives on the SD card.
+#
+# On a Pi, the boot firmware is on the first partition (FAT32 with
+# the proprietary BCM2711 bootloader files). Then the standard
+# Ubuntu Core layout:
+#
+#   p1:  system-boot  (vfat,   512 MB) - bootloader + kernel + cmdline
+#   p2:  system-seed  (ext4,   512 MB) - read-only system snaps
+#   p3:  system-data  (ext4,  rest)    - writable (LUKS-encrypted)
+#
+# The Pi 4 boots from p1; snapd boots from p2; user data is on p3.
+# ---------------------------------------------------------------------------
+volumes:
+  pi4:
+    schema: mbr
+    bootloader: u-boot
+    structure:
+      - name: system-boot
+        type: 0C
+        filesystem: vfat
+        filesystem-label: system-boot
+        size: 512M
+        content:
+          - source: bootfiles/
+            target: /
+        update:
+          # The boot partition is updated in place; it is not part
+          # of the A/B swap.
+          preserve: true
+
+      - name: system-seed
+        role: system-seed
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: system-seed
+        size: 512M
+        update:
+          # Seed is updated as part of the A/B swap.
+          preserve: true
+
+      - name: system-data
+        role: system-data
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: writable
+        # No `size:` means "use the rest of the disk".
+        update:
+          preserve: true
+
+# ---------------------------------------------------------------------------
+# Bootloader configuration (config.txt).
+#
+# config.txt is the Pi's standard config file. We set the kernel
+# command line, GPU memory split, and a few Pi-specific bits.
+# ---------------------------------------------------------------------------
+defaults:
+  pi4:
+    target: /boot/firmware/config.txt
+    # 64-bit kernel.
+    arm_64bit: 1
+    # Reserve 256 MB to the GPU. Pi 4 has plenty; Quilt uses
+    # OpenGL on the V3D for some kernels.
+    gpu_mem: 256
+    # Enable UART for the serial console.
+    enable_uart: 1
+    # Disable the rainbow splash and the under-voltage warning; the
+    # first boot is slow enough that the splash is misleading.
+    disable_splash: 1
+    disable_overscan: 1
+    # Kernel command line.
+    cmdline: "snap_core=core24 snap_kernel=pi4-kernel console=tty1 console=serial0,115200 quiet splash vt.global_cursor_default=0"
+
+# ---------------------------------------------------------------------------
+# Default kernel command line. Appended to `cmdline` in config.txt.
+# ---------------------------------------------------------------------------
+kernel-cmdline: "console=tty1 console=serial0,115200 quiet splash vt.global_cursor_default=0"
+
+# ---------------------------------------------------------------------------
+# Per-board device-tree.
+#
+# The Pi 4 has several board revisions (1.0, 1.1, 1.2, 1.4, 1.5).
+# We ship DTBs for all of them; the bootloader picks the right one
+# at boot.
+# ---------------------------------------------------------------------------
+device-tree: pi4-device-trees/
+
+# ---------------------------------------------------------------------------
+# Snap metadata.
+# ---------------------------------------------------------------------------
+assumes:
+  - snapctl-after-boot
+  - common-data-dir
+  - core22-base
+
+# ---------------------------------------------------------------------------
+# Hooks. Most Ubuntu Core images don't need a gadget install hook;
+# we keep this stub for forward-compatibility.
+# ---------------------------------------------------------------------------
+hooks:
+  install:
+    plugs: []
+
+# ---------------------------------------------------------------------------
+# Confinement. The gadget is `base` type, but its plugs are still
+# declared.
+# ---------------------------------------------------------------------------
+plugs:
+  system-backup:
+    interface: system-backup

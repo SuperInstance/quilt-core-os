@@ -1,0 +1,147 @@
+# gadget/amd64.yaml — Ubuntu Core gadget for generic amd64
+# hardware (NUC, MiniPC, server-class).
+#
+# This is a minimal EFI-based gadget. It boots via UEFI from
+# either a disk or a USB stick. Secure Boot is supported.
+#
+# Use this when you want to run quilt-core on:
+#   - Intel NUC (any generation from 8th-gen onwards)
+#   - ASRock / ASUS MiniPC
+#   - Any amd64 server with EFI firmware
+#   - Cloud VMs (KVM with OVMF)
+#
+# For Raspberry Pi, see gadget/pi4.yaml or gadget/pi5.yaml.
+# For Jetson, see gadget/jetson.yaml.
+
+name: quilt-amd64
+version: 24-0.4
+summary: Quilt gadget for generic amd64 (UEFI).
+description: |
+  Boot, partition layout, and EFI configuration for generic
+  amd64 hardware with UEFI firmware. Used by quilt-core's
+  Ubuntu Core image for NUCs, MiniPCs, and servers.
+
+grade: stable
+type: base
+icon: amd64.png
+
+base: core24
+
+architectures:
+  - amd64
+
+# ---------------------------------------------------------------------------
+# Layout.
+#
+#   p1:  EFI System Partition   vfat,   512 MB  (bootloader + kernels)
+#   p2:  system-seed            ext4,   512 MB  (read-only system snaps)
+#   p3:  system-data            ext4,   rest   (writable)
+#   p4:  system-boot (logical)  ext4,   1 GB    (A/B second system)
+#   p5:  system-data (logical)  ext4,   rest    (A/B second writable)
+#
+# Ubuntu Core uses GRUB for amd64, and GRUB supports A/B via
+# `grubenv`. The A/B pair is p2+p3 vs p4+p5.
+# ---------------------------------------------------------------------------
+volumes:
+  pc:
+    schema: gpt
+    bootloader: grub
+    structure:
+      - name: EFI System Partition
+        type: C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+        filesystem: vfat
+        filesystem-label: system-boot
+        size: 512M
+        content:
+          - source: grub-bin/
+            target: EFI/BOOT/
+          - source: grub-cfg/
+            target: EFI/BOOT/grub.cfg
+          - source: grubenv/
+            target: EFI/ubuntu/grubenv
+        update:
+          preserve: true
+
+      - name: system-seed
+        role: system-seed
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: system-seed
+        size: 512M
+        update:
+          preserve: true
+
+      - name: system-data
+        role: system-data
+        type: 0FC
+        filesystem: ext4
+        filesystem-label: writable
+        update:
+          preserve: true
+
+# ---------------------------------------------------------------------------
+# Bootloader: GRUB.
+#
+# On amd64, GRUB is the bootloader. The grub.cfg lives in the EFI
+# System Partition. We use the standard Ubuntu Core GRUB config.
+# ---------------------------------------------------------------------------
+defaults:
+  pc:
+    target: /EFI/BOOT/grub.cfg
+    # Default timeout for the GRUB menu: 0 (no menu) on production,
+    # overridable to a positive value via the configure hook.
+    timeout: 0
+    # Quiet boot.
+    quiet: true
+
+# Kernel command line. We do not pass `quiet` here; the kernel
+# cmdline is independent of GRUB's quiet flag.
+kernel-cmdline: "console=ttyS0,115200 console=tty1 quiet splash"
+
+# ---------------------------------------------------------------------------
+# Secure Boot.
+#
+# When the firmware has Secure Boot enabled, the kernel must be
+# signed. Ubuntu Core's kernel snap is signed by Canonical. The
+# gadget does not need to do anything special; GRUB loads the
+# signed shim, which loads the signed kernel.
+# ---------------------------------------------------------------------------
+secure-boot:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# TPM.
+#
+# amd64 machines often have a TPM 2.0. We use it for:
+#   - sealed disk encryption keys (LUKS)
+#   - measured boot (PCRs)
+#   - remote attestation (via tpm2-tss)
+#
+# The Quilt daemon does not use the TPM directly; it just exposes
+# `quilt-core status --tpm` to show PCR values for ops.
+# ---------------------------------------------------------------------------
+tpm:
+  enabled: true
+  pcr-policy: standard
+
+assumes:
+  - snapctl-after-boot
+  - common-data-dir
+  - core22-base
+  - kernel-efi
+  - sec-boot
+
+hooks:
+  install:
+    plugs: []
+
+plugs:
+  system-backup:
+    interface: system-backup
+  kernel-module-load:
+    interface: kernel-module-load
+  system-files:
+    interface: system-files
+    read:
+      - /boot/efi
+      - /etc/fstab

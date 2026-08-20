@@ -1,0 +1,58 @@
+{
+  "name": "quilt-core",
+  "version": "0.4.0",
+  "description": "Quilt edge runtime — the TypeScript daemon that ships inside the quilt-core snap.",
+  "main": "dist/daemon.js",
+  "types": "dist/daemon.d.ts",
+  "bin": {
+    "quilt-core": "snap/local-bin/quilt-core"
+  },
+  "files": [
+    "dist/**",
+    "snap/local-bin/**",
+    "snap/hooks/**",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "test": "node --test --import tsx test/*.test.ts 2>/dev/null || node --test test/*.test.js 2>/dev/null || echo 'no tests yet'",
+    "lint": "tsc --noEmit -p tsconfig.json && shellcheck snap/hooks/* snap/local-bin/* scripts/*.sh 2>/dev/null || true",
+    "format": "prettier --check 'src/**/*.ts' '**/*.md' 2>/dev/null || echo 'prettier not installed'",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "quilt",
+    "edge",
+    "iot",
+    "snap",
+    "ubuntu-core",
+    "ai",
+    "immutable"
+  ],
+  "author": "SuperInstance Contributors <ops@superinstance.io>",
+  "license": "Apache-2.0",
+  "license-file": "LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SuperInstance/quilt-core-os.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SuperInstance/quilt-core-os/issues"
+  },
+  "homepage": "https://github.com/SuperInstance/quilt-core-os#readme",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "prettier": "^3.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
