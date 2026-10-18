@@ -130,7 +130,7 @@ log "board:   $BOARD"
 log "channel: $CHANNEL"
 
 # ---------------------------------------------------------------------------
-# 1. Make sure we have a quilt-core snap to embed.
+# 1. Make sure we have a @superinstance/quilt-core snap to embed.
 #
 # If the user didn't pass --snap, we build one and pull it from the
 # `snapcraft` build output. If neither works, we fall back to the
@@ -155,7 +155,7 @@ else
     SNAP_TO_EMBED="$CANDIDATE"
     log "embedding previously built snap: $CANDIDATE"
   else
-    log "no local snap found; image will pull quilt-core from the store ($CHANNEL)"
+    log "no local snap found; image will pull @superinstance/quilt-core from the store ($CHANNEL)"
   fi
 fi
 

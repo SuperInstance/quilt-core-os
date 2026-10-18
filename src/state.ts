@@ -1,5 +1,5 @@
 /**
- * src/state.ts — persistent state for the quilt-core daemon.
+ * src/state.ts — persistent state for the @superinstance/quilt-core daemon.
  *
  * Backed by SQLite (via the built-in `node:sqlite` module on Node
  * 22+; older Node uses the `better-sqlite3` shim, but we ship with

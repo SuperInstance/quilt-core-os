@@ -24,7 +24,7 @@ summary: Quilt gadget for the NVIDIA Jetson Orin Nano / Orin NX.
 description: |
   Boot, partition layout, and device-tree configuration for the
   NVIDIA Jetson Orin Nano dev kit and Orin NX module. Used by
-  quilt-core's Ubuntu Core image for edge-GPU inference.
+  @superinstance/quilt-core's Ubuntu Core image for edge-GPU inference.
 
 grade: stable
 type: base
@@ -164,7 +164,7 @@ plugs:
 #      Nano dev kit boots from microSD. We support both.
 #
 #   4. GPU partitioning. `tegrastats` shows the live GPU
-#      utilisation per engine. We surface this in `quilt-core
+#      utilisation per engine. We surface this in `@superinstance/quilt-core
 #      status --gpu`.
 #
 #   5. Recovery. If cboot is corrupted (rare; only happens with

@@ -1,6 +1,6 @@
-name: quilt-core
+name: @superinstance/quilt-core
 base: core24
-adopt-info: quilt-core
+adopt-info: @superinstance/quilt-core
 summary: Quilt edge runtime — immutable, atomic, un-brickable.
 description: |
   Quilt is an edge-AI runtime that turns a Raspberry Pi, Jetson, or
@@ -9,7 +9,7 @@ description: |
   refresh is atomic and every bad boot reverts automatically.
 
   This snap contains:
-    - The TypeScript `quilt-core` daemon (unix-socket service).
+    - The TypeScript `@superinstance/quilt-core` daemon (unix-socket service).
     - The CLI shim used by users and `quilt-fleet`.
     - The state store (SQLite) and OTA checker.
 
@@ -28,7 +28,7 @@ compression: lzo
 # Build-time metadata
 # ---------------------------------------------------------------------------
 parts:
-  quilt-core:
+  @superinstance/quilt-core:
     plugin: nil
     source: .
     build-packages:
@@ -39,11 +39,11 @@ parts:
       # Install the TypeScript daemon + its dependencies.
       npm ci --omit=dev
       npm run compile
-      mkdir -p $CRAFT_PART_INSTALL/opt/quilt-core
-      cp -r dist/      $CRAFT_PART_INSTALL/opt/quilt-core/
-      cp -r node_modules $CRAFT_PART_INSTALL/opt/quilt-core/
-      cp package.json   $CRAFT_PART_INSTALL/opt/quilt-core/
-      cp -r src/assets  $CRAFT_PART_INSTALL/opt/quilt-core/assets
+      mkdir -p $CRAFT_PART_INSTALL/opt/@superinstance/quilt-core
+      cp -r dist/      $CRAFT_PART_INSTALL/opt/@superinstance/quilt-core/
+      cp -r node_modules $CRAFT_PART_INSTALL/opt/@superinstance/quilt-core/
+      cp package.json   $CRAFT_PART_INSTALL/opt/@superinstance/quilt-core/
+      cp -r src/assets  $CRAFT_PART_INSTALL/opt/@superinstance/quilt-core/assets
     stage-packages:
       - libsqlite3-0
       - ca-certificates
@@ -79,8 +79,8 @@ layout:
 # Apps: the CLI shim and the long-running daemon.
 # ---------------------------------------------------------------------------
 apps:
-  quilt-core:
-    command: bin/quilt-core
+  @superinstance/quilt-core:
+    command: bin/@superinstance/quilt-core
     command-chain: [bin/hooks-pre]
     daemon: simple
     daemon-scope: system
@@ -89,7 +89,7 @@ apps:
     stop-timeout: 30s
     install-mode: enable
     refresh-mode: ignore-running
-    common-id: quilt-core
+    common-id: @superinstance/quilt-core
     plugs:
       - network
       - network-bind
@@ -108,7 +108,7 @@ apps:
       - mount-observe
     environment:
       NODE_ENV: production
-      NODE_PATH: $SNAP/opt/quilt-core/node_modules
+      NODE_PATH: $SNAP/opt/@superinstance/quilt-core/node_modules
       QUILT_HOME: $SNAP_DATA
       QUILT_SOCK: $SNAP_DATA/run/quilt-core.sock
       QUILT_STATE: $SNAP_COMMON/state/state.db
@@ -118,9 +118,9 @@ apps:
       QUILT_REVISION: $SNAP_REVISION
 
   quilt-core.cli:
-    command: bin/quilt-core
+    command: bin/@superinstance/quilt-core
     # The CLI is the same binary but invoked without `daemon` subcommand.
-    # Users run `quilt-core status`, `quilt-core init`, etc.
+    # Users run `@superinstance/quilt-core status`, `@superinstance/quilt-core init`, etc.
     plugs:
       - network
       - network-bind
@@ -133,7 +133,7 @@ apps:
 
   # One-shot helper invoked by the configure hook.
   quilt-core.configcheck:
-    command: bin/quilt-core configcheck
+    command: bin/@superinstance/quilt-core configcheck
     daemon: oneshot
     timer: 1d
     plugs:

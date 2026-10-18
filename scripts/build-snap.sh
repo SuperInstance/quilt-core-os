@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/build-snap.sh — build the quilt-core snap locally.
+# scripts/build-snap.sh — build the @superinstance/quilt-core snap locally.
 #
 # Usage:
 #   ./scripts/build-snap.sh                    # default: build the snap
@@ -30,7 +30,7 @@ SKIP_BUILD=0
 # ---------------------------------------------------------------------------
 # Defaults pulled from snap/snapcraft.yaml.
 # ---------------------------------------------------------------------------
-SNAP_NAME="quilt-core"
+SNAP_NAME="@superinstance/quilt-core"
 SNAP_VERSION="$(grep -E '^version:' "$REPO_ROOT/snap/snapcraft.yaml" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo '0.0.0')"
 if [[ -z "$SNAP_VERSION" || "$SNAP_VERSION" == "0.0.0" ]]; then
   SNAP_VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo '0.0.0-dev')"

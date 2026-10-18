@@ -5,7 +5,7 @@
  *
  *   1. Poll the snap store (via `snapd`'s REST API over the
  *      abstract unix socket at /run/snapd.socket) for new
- *      revisions of the `quilt-core` snap on the configured
+ *      revisions of the `@superinstance/quilt-core` snap on the configured
  *      channel.
  *
  *   2. Verify the assertions cryptographically. snapd does this
@@ -266,7 +266,7 @@ export class OtaChecker {
 
   private async currentRemoteRevision(): Promise<string | null> {
     try {
-      const url = `/v2/snaps/${encodeURIComponent('quilt-core')}`;
+      const url = `/v2/snaps/${encodeURIComponent('@superinstance/quilt-core')}`;
       const res = await this.snapdGet(url);
       if (res.status !== 200) return null;
       const j = JSON.parse(res.body) as {
@@ -289,7 +289,7 @@ export class OtaChecker {
 
   private async snapdPin(): Promise<{ pinned: boolean; revision: string; current: string }> {
     try {
-      const url = `/v2/snaps/${encodeURIComponent('quilt-core')}`;
+      const url = `/v2/snaps/${encodeURIComponent('@superinstance/quilt-core')}`;
       const res = await this.snapdGet(url);
       if (res.status !== 200) return { pinned: false, revision: '', current: this._currentRev };
       const j = JSON.parse(res.body) as {
@@ -316,7 +316,7 @@ export class OtaChecker {
 
   private async snapdRefresh(channel: string): Promise<boolean> {
     try {
-      const url = `/v2/snaps/${encodeURIComponent('quilt-core')}`;
+      const url = `/v2/snaps/${encodeURIComponent('@superinstance/quilt-core')}`;
       const body = {
         action:  'refresh',
         channel,

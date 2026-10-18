@@ -1,7 +1,7 @@
 {
-  "name": "quilt-core",
+  "name": "@superinstance/quilt-core",
   "version": "0.4.0",
-  "description": "Quilt edge runtime — the TypeScript daemon that ships inside the quilt-core snap.",
+  "description": "Quilt edge runtime \u2014 the TypeScript daemon that ships inside the quilt-core snap.",
   "main": "dist/daemon.js",
   "types": "dist/daemon.d.ts",
   "bin": {
