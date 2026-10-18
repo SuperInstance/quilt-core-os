@@ -4,7 +4,7 @@
 # This is a minimal EFI-based gadget. It boots via UEFI from
 # either a disk or a USB stick. Secure Boot is supported.
 #
-# Use this when you want to run quilt-core on:
+# Use this when you want to run @superinstance/quilt-core on:
 #   - Intel NUC (any generation from 8th-gen onwards)
 #   - ASRock / ASUS MiniPC
 #   - Any amd64 server with EFI firmware
@@ -18,7 +18,7 @@ version: 24-0.4
 summary: Quilt gadget for generic amd64 (UEFI).
 description: |
   Boot, partition layout, and EFI configuration for generic
-  amd64 hardware with UEFI firmware. Used by quilt-core's
+  amd64 hardware with UEFI firmware. Used by @superinstance/quilt-core's
   Ubuntu Core image for NUCs, MiniPCs, and servers.
 
 grade: stable
@@ -118,7 +118,7 @@ secure-boot:
 #   - remote attestation (via tpm2-tss)
 #
 # The Quilt daemon does not use the TPM directly; it just exposes
-# `quilt-core status --tpm` to show PCR values for ops.
+# `@superinstance/quilt-core status --tpm` to show PCR values for ops.
 # ---------------------------------------------------------------------------
 tpm:
   enabled: true

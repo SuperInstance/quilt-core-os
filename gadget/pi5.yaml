@@ -20,7 +20,7 @@ summary: Quilt gadget for the Raspberry Pi 5.
 description: |
   Boot, partition layout, and device-tree configuration for the
   Raspberry Pi 5 (4 GB and 8 GB revisions B0). Used by
-  quilt-core's Ubuntu Core image.
+  @superinstance/quilt-core's Ubuntu Core image.
 
 grade: stable
 type: base

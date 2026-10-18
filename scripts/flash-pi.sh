@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/flash-pi.sh — flash a quilt-core image to an SD card or
+# scripts/flash-pi.sh — flash a @superinstance/quilt-core image to an SD card or
 # block device.
 #
 # This is a thin wrapper around `bmaptool` and `xz` that adds
@@ -202,5 +202,5 @@ log "next steps:"
 log "  1.  insert the SD card into the Pi and power it on"
 log "  2.  wait ~90s for first boot to complete (Ubuntu Core is slow on first boot)"
 log "  3.  ssh ubuntu@<pi-ip>  (password is set via the Ubuntu SSO dashboard)"
-log "  4.  quilt-core init   to register this node with quilt-fleet"
-log "  5.  quilt-core status to verify"
+log "  4.  @superinstance/quilt-core init   to register this node with quilt-fleet"
+log "  5.  @superinstance/quilt-core status to verify"

@@ -1,5 +1,5 @@
 /**
- * src/daemon.ts — the long-running quilt-core service.
+ * src/daemon.ts — the long-running @superinstance/quilt-core service.
  *
  * This module is the heart of the snap. It is a single TypeScript
  * entry point that is invoked three different ways:
@@ -10,7 +10,7 @@
  *
  * The daemon exposes a single unix-domain socket (QUILT_SOCK) on
  * which it accepts line-delimited JSON RPCs from:
- *   - the `quilt-core` CLI shim (snap/local-bin/quilt-core)
+ *   - the `@superinstance/quilt-core` CLI shim (snap/local-bin/@superinstance/quilt-core)
  *   - the quilt-fleet controller (over a separate fleet-side
  *     socket; not this one).
  *   - other local cells via the cell-ipc port.
@@ -38,7 +38,7 @@ import { OtaChecker } from './ota-checker';
 // and friends for the rare case the daemon is run outside a snap.
 // ---------------------------------------------------------------------------
 const SNAP          = process.env.SNAP          ?? path.resolve(__dirname, '..');
-const SNAP_NAME     = process.env.SNAP_NAME     ?? 'quilt-core';
+const SNAP_NAME     = process.env.SNAP_NAME     ?? '@superinstance/quilt-core';
 const SNAP_DATA     = process.env.SNAP_DATA     ?? path.join(os.homedir(), '.quilt');
 const SNAP_COMMON   = process.env.SNAP_COMMON   ?? path.join(os.homedir(), '.quilt-common');
 const QUILT_SOCK    = process.env.QUILT_SOCK    ?? path.join(SNAP_COMMON, 'run', 'quilt-core.sock');
@@ -178,7 +178,7 @@ export class Daemon extends EventEmitter {
         resolve();
       });
     });
-    info(`quilt-core daemon listening on ${QUILT_SOCK}`);
+    info(`@superinstance/quilt-core daemon listening on ${QUILT_SOCK}`);
     info(`  version: ${QUILT_VERSION} (rev ${QUILT_REV})`);
     info(`  pid:     ${process.pid}`);
     info(`  state:   ${QUILT_STATE}`);
@@ -623,7 +623,7 @@ async function main(): Promise<void> {
   }
 
   // Unknown subcommand.
-  process.stderr.write(`quilt-core daemon: unknown subcommand: ${sub}\n`);
+  process.stderr.write(`@superinstance/quilt-core daemon: unknown subcommand: ${sub}\n`);
   process.stderr.write('usage: daemon {daemon|init|configcheck}\n');
   process.exit(2);
 }
@@ -632,7 +632,7 @@ async function main(): Promise<void> {
 // by tests).
 if (require.main === module) {
   main().catch((e) => {
-    process.stderr.write(`quilt-core daemon: fatal: ${(e as Error).message}\n`);
+    process.stderr.write(`@superinstance/quilt-core daemon: fatal: ${(e as Error).message}\n`);
     process.exit(1);
   });
 }
